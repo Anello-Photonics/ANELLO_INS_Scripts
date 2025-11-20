@@ -1,125 +1,170 @@
 #!/usr/bin/env python3
 import time
+import sys
+import subprocess
 import serial
 import serial.tools.list_ports
 from pymavlink import mavutil
 from PCANBasic import *
 
-# ---------- User Settings ----------
-ETH_UDP_URI = "udp:0.0.0.0:14550"
-ETH_BAUD = 57600
-ETH_SYSID = 1
-ETH_COMPID = 1
-
+# ---------------- User Settings ---------------- #
+ETH_IP = "192.168.0.3"
 RS232_BAUD = 57600
-RS232_TIMEOUT = 3.0  # seconds for ver hw response
+RS232_TIMEOUT = 3.0
 
 CAN_PGN = 127257
-SERIAL_PORTS = ["/dev/ttyS6", "/dev/ttyS5"]
 
-COMMANDS = [
-    "mavlink stop-all",
-    "param set NMEA2000_CFG 1",
-    f"param set N2K_{CAN_PGN}_RATE 10"
-]
+# ============================================================
+#  MavlinkSerialPort Class
+# ============================================================
+class MavlinkSerialPort():
+    """An object that looks like a serial port, but transmits using MAVLink SERIAL_CONTROL packets"""
+    def __init__(self, portname, baudrate, devnum=0, debug=0):
+        self.baudrate = 0
+        self._debug = debug
+        self.buf = ''
+        self.port = devnum
+        self.debug(f"Connecting with MAVLink to {portname} ...")
+        self.mav = mavutil.mavlink_connection(portname, autoreconnect=True, baud=baudrate)
+        self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC,
+                                    mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+        self.mav.wait_heartbeat()
+        self.debug("HEARTBEAT OK\n")
+        self.debug("Locked serial device\n")
 
-# ---------- Utility ----------
-def print_info(msg):
-    print(msg)
+    def debug(self, s, level=1):
+        if self._debug >= level:
+            print(s)
 
-def send_shell_cmd(mav_udp, cmd):
-    """Send a shell command to PX4 over MAVLink UDP"""
-    print(f"  -> Sending: {cmd}")
-    # PX4 expects a shell wakeup
-    mav_udp.mav.command_long_send(
-        ETH_SYSID,
-        ETH_COMPID,
-        511,  # MAV_CMD_DO_SEND_SCRIPT
-        0,
-        1, 0, 0, 0, 0, 0, 0
-    )
-    cmd_bytes = [ord(c) for c in cmd + "\n"]
-    while cmd_bytes:
-        chunk = cmd_bytes[:70]
-        chunk += [0] * (70 - len(chunk))
-        mav_udp.mav.serial_control_send(
-            0,
-            mavutil.mavlink.SERIAL_CONTROL_FLAG_EXCLUSIVE,
-            0, 0, 70,
-            chunk
-        )
-        cmd_bytes = cmd_bytes[70:]
-    time.sleep(0.15)
+    def write(self, b):
+        self.debug(f"sending '{b}' of len {len(b)}", 2)
+        while len(b) > 0:
+            n = min(len(b), 70)
+            buf = [ord(x) for x in b[:n]] + [0] * (70 - n)
+            self.mav.mav.serial_control_send(
+                self.port,
+                mavutil.mavlink.SERIAL_CONTROL_FLAG_EXCLUSIVE | mavutil.mavlink.SERIAL_CONTROL_FLAG_RESPOND,
+                0,
+                0,
+                n,
+                buf
+            )
+            b = b[n:]
 
-# ---------- Ethernet MAVLink Check ----------
-def check_ethernet():
-    print("\n=== Checking Ethernet MAVLink (UDP) ===")
+    def close(self):
+        self.mav.mav.serial_control_send(self.port, 0, 0, 0, 0, [0]*70)
+
+    def _recv(self):
+        m = self.mav.recv_match(condition='SERIAL_CONTROL.count!=0',
+                                type='SERIAL_CONTROL', blocking=True,
+                                timeout=0.03)
+        if m is not None:
+            if self._debug > 2:
+                print(m)
+            data = m.data[:m.count]
+            self.buf += ''.join(chr(x) for x in data)
+
+    def read(self, n):
+        if len(self.buf) == 0:
+            self._recv()
+        if len(self.buf) > 0:
+            n = min(n, len(self.buf))
+            ret = self.buf[:n]
+            self.buf = self.buf[n:]
+            if self._debug >= 2:
+                for b in ret:
+                    self.debug(f"read 0x{ord(b):x}", 2)
+            return ret
+        return ''
+
+# ============================================================
+#  Ethernet Ping
+# ============================================================
+def check_ethernet_ping(ip=ETH_IP):
+    print("\n=== Checking Ethernet (Ping) ===")
+    param = "-n" if sys.platform.startswith("win") else "-c"
+    cmd = ["ping", param, "1", ip]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode == 0:
+        print(f"[OK] Ping reply from {ip}")
+        return True
+    print(f"[FAIL] No ping response from {ip}")
+    return False
+
+# ============================================================
+#  Enable PX4 MAVLink on Serial Ports
+# ============================================================
+def enable_px4_mavlink():
+    """Send mavlink start commands to /dev/ttyS6 and /dev/ttyS5"""
     try:
-        mav_udp = mavutil.mavlink_connection(ETH_UDP_URI, autoreconnect=True)
-        mav_udp.wait_heartbeat(timeout=5)
-        print(f"[OK] Heartbeat received (sys={mav_udp.target_system}, comp={mav_udp.target_component})")
-        return mav_udp, True
+        print("\n[ETHERNET] Connecting to PX4 via MAVLink...")
+        mav_port = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+
+        commands = [
+            "mavlink start -d /dev/ttyS6 -b 57600 -m 0 -f 1 -r 0\n",  # RS232-1
+            "mavlink start -d /dev/ttyS5 -b 57600 -m 0 -f 1 -r 0\n"   # RS232-2
+        ]
+
+        for cmd in commands:
+            print(f"[ETHERNET] Sending: {cmd.strip()}")
+            mav_port.write(cmd)
+            time.sleep(0.5)
+
+        print("[ETHERNET] PX4 MAVLink enabled on serial ports.")
+        return True
+
     except Exception as e:
-        print(f"[FAIL] Ethernet heartbeat failed: {e}")
-        return None, False
+        print(f"[FAIL] Could not enable PX4 serial MAVLink: {e}")
+        return False
 
-# ---------- Enable PX4 Serial MAVLink ----------
-def enable_px4_serial(mav_udp):
-    print("\n[ETHERNET] Enabling serial MAVLink and NMEA2000...")
-    for cmd in COMMANDS:
-        send_shell_cmd(mav_udp, cmd)
-
-    # Start both RS232 ports
-    for port in SERIAL_PORTS:
-        start_cmd = f"mavlink start -d {port} -b {RS232_BAUD} -m 0 -f 1 -r 0"
-        send_shell_cmd(mav_udp, start_cmd)
-
-    print("[INFO] Waiting 3 seconds to initialize serial ports...")
-    time.sleep(3.0)
-
-# ---------- Detect COM Ports ----------
+# ============================================================
+#  Detect COM Ports (Windows)
+# ============================================================
 def detect_com_ports():
-    ports = [port.device for port in serial.tools.list_ports.comports()]
+    ports = [p.device for p in serial.tools.list_ports.comports()]
     print(f"\nDetected COM ports: {ports}")
     return ports
 
-# ---------- RS232 ver hw Check ----------
+# ============================================================
+#  RS232 Verification
+# ============================================================
 def check_rs232_verhw(com_ports):
+    print("\n=== Checking RS232 Ports ===")
     mapping = {}
-    available_coms = com_ports.copy()
-    for dev in SERIAL_PORTS:
-        found = False
-        for com in available_coms:
-            try:
-                with serial.Serial(com, baudrate=RS232_BAUD, timeout=RS232_TIMEOUT) as ser:
-                    ser.write(b"ver hw\n")
-                    time.sleep(0.1)
-                    response = ser.read(ser.in_waiting or 64)
-                    if response:
-                        print(f"MAVLink responds on {com}: {response.strip().decode(errors='ignore')}")
-                        mapping[dev] = com
-                        available_coms.remove(com)  # avoid double-detecting same COM
-                        found = True
-                        break
-            except Exception:
-                continue
-        if not found:
-            print(f"MAVLink did not respond on any detected COM ports")
-            mapping[dev] = None
+    for com in com_ports:
+        try:
+            print(f"Testing port {com} ...")
+            with serial.Serial(com, RS232_BAUD, timeout=RS232_TIMEOUT) as ser:
+                ser.write(b"ver hw\n")
+                time.sleep(0.2)
+                resp = ser.read(ser.in_waiting or 64)
+                if resp:
+                    decoded = resp.strip().decode(errors='ignore')
+                    print(f"[OK] Response on {com}: {decoded}")
+                    mapping[com] = True
+                else:
+                    print(f"[FAIL] No response on {com}")
+                    mapping[com] = False
+        except Exception as e:
+            print(f"[FAIL] Could not open {com}: {e}")
+            mapping[com] = False
     return mapping
 
-# ---------- CAN Check ----------
+# ============================================================
+#  CAN PGN Check
+# ============================================================
 def check_can_pgn(channel=PCAN_USBBUS1, timeout=5, retries=3):
+    print("\n=== Checking CAN (PCAN) ===")
     pcan = PCANBasic()
     ret = pcan.Initialize(channel, PCAN_BAUD_250K)
     if ret != PCAN_ERROR_OK:
-        print("❌ PCAN initialization failed!")
+        print("[FAIL] PCAN initialization failed.")
         return False
 
-    print(f"\nListening for PGN {CAN_PGN} (0x{CAN_PGN:X}) on {channel}...")
-    for attempt in range(1, retries+1):
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+    print(f"Listening for PGN {CAN_PGN} (0x{CAN_PGN:X})...")
+    for attempt in range(1, retries + 1):
+        start = time.time()
+        while time.time() - start < timeout:
             result = pcan.Read(channel)
             if isinstance(result, tuple):
                 ret_val, msg, *_ = result
@@ -127,58 +172,54 @@ def check_can_pgn(channel=PCAN_USBBUS1, timeout=5, retries=3):
                 ret_val, msg = result, None
 
             if ret_val != PCAN_ERROR_OK or msg is None:
-                time.sleep(0.001)
                 continue
 
             can_id = msg.ID
             pgn = (can_id >> 8) & 0x3FFFF
             if pgn == CAN_PGN:
-                print(f"✅ Received PGN {CAN_PGN} from source {can_id & 0xFF}")
+                print(f"[OK] Received PGN {CAN_PGN} from SA {can_id & 0xFF}")
                 pcan.Uninitialize(channel)
                 return True
 
-        print(f"[Attempt {attempt}] No PGN {CAN_PGN} received in {timeout}s.")
-        if attempt < retries:
-            print("Retrying...")
-            time.sleep(1)
+        print(f"[Attempt {attempt}] No PGN received.")
+        time.sleep(0.5)
 
     pcan.Uninitialize(channel)
-    print(f"❌ Failed to detect PGN {CAN_PGN} after {retries} attempts.")
+    print(f"[FAIL] No CAN PGN {CAN_PGN} detected.")
     return False
 
-# ---------- Main ----------
+# ============================================================
+#  MAIN
+# ============================================================
 def main():
-    results = {"Ethernet": False, "RS232_ports": {}, "CAN": False}
+    results = {
+        "ethernet": False,
+        "rs232": {},
+        "can": False
+    }
 
-    # Ethernet check
-    mav_udp, eth_ok = check_ethernet()
-    results["Ethernet"] = eth_ok
+    # Ethernet
+    results["ethernet"] = check_ethernet_ping()
+    if results["ethernet"]:
+        enable_px4_mavlink()
+        time.sleep(1.0)
 
-    # Enable PX4 serial
-    if eth_ok:
-        enable_px4_serial(mav_udp)
+    # RS232
+    coms = detect_com_ports()
+    results["rs232"] = check_rs232_verhw(coms)
 
-    # Detect COM ports and check ver hw
-    com_ports = detect_com_ports()
-    rs232_mapping = check_rs232_verhw(com_ports)
-    results["RS232_ports"] = rs232_mapping
+    # CAN
+    results["can"] = check_can_pgn()
 
-    # Check CAN PGN
-    can_ok = check_can_pgn()
-    results["CAN"] = can_ok
+    # Summary
+    print("\n==================== SUMMARY ====================")
+    print(f"Ethernet: {'[OK]' if results['ethernet'] else '[FAIL]'}")
+    print("\nRS232 Ports:")
+    for com, status in results["rs232"].items():
+        print(f"  {com}: {'[OK]' if status else '[FAIL]'}")
+    print(f"\nCAN PGN {CAN_PGN}: {'[OK]' if results['can'] else '[FAIL]'}")
+    print("=================================================\n")
 
-    # ---------- Summary ----------
-    print("\n=== Summary of MAVLink Communication Checks ===")
-    print(f"Ethernet/UDP: {'[OK]' if results['Ethernet'] else '[FAIL]'}")
-    if results["RS232_ports"]:
-        print("RS232 Ports:")
-        for com in results["RS232_ports"].values():
-            status = "[OK]" if com else "[FAIL]"
-            print(f"  {com if com else 'None'} {status}")
-    else:
-        print("RS232 Ports: None detected")
-    print(f"CAN: {'[OK]' if results['CAN'] else '[FAIL]'}")
-    print("\n=== Check Complete ===")
 
 if __name__ == "__main__":
     main()
