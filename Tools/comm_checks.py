@@ -118,6 +118,49 @@ def enable_mavlink():
         return False
 
 # ============================================================
+#  Enable / Disable Factory Mode
+# ============================================================
+
+def factory_mode(toggle):
+    """Send mavlink start commands to /dev/ttyS6 and /dev/ttyS5"""
+    try:
+        print("\n[ETHERNET] Connecting to INS via MAVLink...")
+        mav_port = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+
+        factory_on = [
+            "param set IMU_MB_C_FACTORY 1",
+            "param set IMU_MB_C_FTOG 0"
+            "reboot"
+        ]
+
+        factory_off = [
+            "param set IMU_MB_C_FACTORY 0",
+            "param set IMU_MB_C_FTOG 1"
+            "reboot"
+        ]
+
+        if toggle == True:
+            for cmd in factory_on:
+                print(f"Sending: {cmd.strip()}")
+                mav_port.write(cmd)
+                time.sleep(2)
+                print("Factory Mode ON")
+
+        else :
+            for cmd in factory_off:
+                print(f"Sending: {cmd.strip()}")
+                mav_port.write(cmd)
+                time.sleep(2)
+                print("Factory Mode OFF")
+        
+        return True
+
+    except Exception as e:
+        print(f"[FAIL] Could not toggle factory mode: {e}")
+        return False
+
+
+# ============================================================
 #  Detect COM Ports (Windows)
 # ============================================================
 def detect_com_ports():
@@ -260,6 +303,8 @@ def main():
         "rs232": {},
         "can": False
     }
+    # disable factory mode
+    factory_mode(False)
 
     # Ethernet
     results["ethernet"] = check_ethernet_ping()
@@ -284,6 +329,8 @@ def main():
     print(f"\nCAN PGN {CAN_PGN}: {'[OK]' if results['can'] else '[FAIL]'}")
     print("=================================================\n")
 
+    # enable factory mode
+    factory_mode(True)
 
 if __name__ == "__main__":
     main()
