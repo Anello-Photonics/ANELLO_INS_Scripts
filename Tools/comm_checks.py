@@ -92,12 +92,12 @@ def check_ethernet_ping(ip=ETH_IP):
     return False
 
 # ============================================================
-#  Enable PX4 MAVLink on Serial Ports
+#  Enable MAVLink on Serial Ports
 # ============================================================
-def enable_px4_mavlink():
+def enable_mavlink():
     """Send mavlink start commands to /dev/ttyS6 and /dev/ttyS5"""
     try:
-        print("\n[ETHERNET] Connecting to PX4 via MAVLink...")
+        print("\n[ETHERNET] Connecting to INS via MAVLink...")
         mav_port = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
 
         commands = [
@@ -110,11 +110,11 @@ def enable_px4_mavlink():
             mav_port.write(cmd)
             time.sleep(0.5)
 
-        print("[ETHERNET] PX4 MAVLink enabled on serial ports.")
+        print("[ETHERNET] INS MAVLink enabled on serial ports.")
         return True
 
     except Exception as e:
-        print(f"[FAIL] Could not enable PX4 serial MAVLink: {e}")
+        print(f"[FAIL] Could not enable INS serial MAVLink: {e}")
         return False
 
 # ============================================================
@@ -201,7 +201,7 @@ def main():
     # Ethernet
     results["ethernet"] = check_ethernet_ping()
     if results["ethernet"]:
-        enable_px4_mavlink()
+        enable_mavlink()
         time.sleep(1.0)
 
     # RS232
