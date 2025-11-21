@@ -189,6 +189,69 @@ def check_can_pgn(channel=PCAN_USBBUS1, timeout=5, retries=3):
     return False
 
 # ============================================================
+#  Run Generic Shell Command via MAVLink
+# ============================================================
+def run_shell_command(mav_serialport, cmd, timeout=4.0):
+    """
+    Send MAVLink shell command (e.g., dmesg, df) and return full output.
+    """
+    print(f"\nRunning command: {cmd}")
+
+    # Wake shell
+    mav_serialport.write("\n")
+    time.sleep(0.2)
+
+    # Send command
+    mav_serialport.write(cmd + "\n")
+    time.sleep(0.2)
+
+    # Collect output
+    output = ""
+    start = time.time()
+
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        chunk = mav_serialport.read(4096)
+        if chunk:
+            output += chunk
+        time.sleep(0.05)
+
+    output = output.strip()
+    if output:
+        print(output)
+    else:
+        print("[!] No response received")
+
+    return output
+
+
+# ============================================================
+#  Print dmesg + df diagnostics
+# ============================================================
+def print_dmesg_and_df():
+    """
+    Connect via MAVLink and print dmesg / df output.
+    """
+    print("\n================ SYSTEM DIAGNOSTICS ================\n")
+
+    try:
+        mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell for diagnostics: {e}")
+        return
+
+    print("\n------------------- dmesg -------------------")
+    run_shell_command(mavport, "dmesg", timeout=6)
+
+    print("\n-------------------- df ---------------------")
+    run_shell_command(mavport, "df -h", timeout=3)
+
+    print("\n====================================================\n")
+
+    mavport.close()
+
+
+# ============================================================
 #  MAIN
 # ============================================================
 def main():
@@ -203,6 +266,7 @@ def main():
     if results["ethernet"]:
         enable_mavlink()
         time.sleep(1.0)
+        print_dmesg_and_df()   # ← ADD THIS
 
     # RS232
     coms = detect_com_ports()
