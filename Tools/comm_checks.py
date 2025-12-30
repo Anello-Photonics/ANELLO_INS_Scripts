@@ -293,6 +293,28 @@ def print_dmesg_and_df():
 
     mavport.close()
 
+# ============================================================
+#  Enable CAN PGN output
+# ============================================================
+def enable_CAN():
+
+
+    try:
+        mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell for diagnostics: {e}")
+        return
+
+
+    run_shell_command(mavport, "param set NM2K_CFG 1", timeout=6)
+    run_shell_command(mavport, "param set NM2K_BITRATE 250000", timeout=6)
+    run_shell_command(mavport, "param set NM2K_127257_RATE 10", timeout=6)
+    run_shell_command(mavport, "reboot", timeout=6)
+    
+
+
+    mavport.close()
+
 
 # ============================================================
 #  MAIN
@@ -318,6 +340,7 @@ def main():
     results["rs232"] = check_rs232_verhw(coms)
 
     # CAN
+    enable_CAN()
     results["can"] = check_can_pgn()
 
     # Summary
