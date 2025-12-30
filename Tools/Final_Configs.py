@@ -192,6 +192,7 @@ def set_final_configs(mav_serialport, timeout=1.0):
         "param set IMU_MB_C_FACTORY 0",
         "param set IMU_MB_C_FTOG 1"
         "param set SYS_AUTOSTART 60009",
+        "param set NM2K_CFG 1",
         "param set GPS_SEP_BASE_X 0.0",
         "param set GPS_SEP_BASE_Y 0.0",
         "param set GPS_SEP_BASE_Z 0.0",
