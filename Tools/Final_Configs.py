@@ -236,51 +236,48 @@ def set_final_configs(mav_serialport, timeout=1.0):
 
     print("\n[Done] All lever arms attempted to be set.")
 
-def erase_logs(mav_serialport, timeout=5.0):
+def nsh_cmd(mav_serialport, cmd, timeout=3.0):
     """
-    Erase all PX4 logs on older PX4/NuttX builds
-    (no logger erase support).
+    Send a single NSH command and wait for the nsh> prompt.
     """
-    print("\n[Action] Erasing PX4 logs (legacy method)...")
+    mav_serialport.write(cmd + "\n")
 
-    def run(cmd, wait=0.3, capture_time=1.0):
-        mav_serialport.write("\n")
-        time.sleep(0.1)
-        mav_serialport.write(cmd + "\n")
-        time.sleep(wait)
+    output = ""
+    start = time.time()
 
-        output = ""
-        start = time.time()
-        while time.time() - start < capture_time:
-            mav_serialport._recv()
-            chunk = mav_serialport.read(1024)
-            if chunk:
-                output += chunk
-            time.sleep(0.05)
-        return output.strip()
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        chunk = mav_serialport.read(1024)
+        if chunk:
+            output += chunk
+            if "nsh>" in output:
+                break
+        time.sleep(0.05)
 
-    # 1) Stop logger
-    print("[Step 1] Stopping logger")
-    out = run("logger stop", capture_time=1.5)
-    if out:
-        print(out)
+    return output
 
-    # 2) Delete files inside date folders
-    print("[Step 2] Deleting log files")
-    run("rm /fs/microsd/log/*/*", capture_time=1.5)
+def erase_logs(mav_serialport):
+    print("\n[Action] Erasing logs (QGC-compatible)...")
 
-    # 3) Remove empty date directories
-    print("[Step 3] Removing empty log directories")
-    run("rmdir /fs/microsd/log/*", capture_time=1.5)
+    # Stop logger just in case
+    print(nsh_cmd(mav_serialport, "logger stop"))
 
-    # 4) Verify
-    print("[Verify] Remaining log entries:")
-    out = run("ls /fs/microsd/log", capture_time=1.5)
-    if out:
-        print(out)
-        print("[Warning] Some entries remain")
-    else:
-        print("[Done] Log directory is empty")
+    # List folders
+    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log"))
+
+    # Delete each dated directory explicitly
+    out = nsh_cmd(mav_serialport, "ls /fs/microsd/log")
+    for line in out.splitlines():
+        line = line.strip()
+        if re.match(r"\d{4}-\d{2}-\d{2}/", line):
+            folder = "/fs/microsd/log/" + line.rstrip("/")
+            print(f"[Deleting] {folder}")
+            print(nsh_cmd(mav_serialport, f'rm -r "{folder}"'))
+
+    # Verify
+    print("[Verify]")
+    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log"))
+
 
 
 def print_df():
