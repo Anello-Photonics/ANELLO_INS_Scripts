@@ -129,28 +129,26 @@ def factory_mode(toggle):
 
         factory_on = [
             "param set IMU_MB_C_FACTORY 1",
-            "param set IMU_MB_C_FTOG 0"
+            "param set IMU_MB_C_FTOG 0",
             "reboot"
         ]
 
         factory_off = [
             "param set IMU_MB_C_FACTORY 0",
-            "param set IMU_MB_C_FTOG 1"
+            "param set IMU_MB_C_FTOG 1",
             "reboot"
         ]
 
         if toggle == True:
             for cmd in factory_on:
                 print(f"Sending: {cmd.strip()}")
-                mav_port.write(cmd)
-                time.sleep(2)
+                run_shell_command(mav_port, cmd, timeout=6)
                 print("Factory Mode ON")
 
         else :
             for cmd in factory_off:
                 print(f"Sending: {cmd.strip()}")
-                mav_port.write(cmd)
-                time.sleep(2)
+                run_shell_command(mav_port, cmd, timeout=6)
                 print("Factory Mode OFF")
         
         return True
