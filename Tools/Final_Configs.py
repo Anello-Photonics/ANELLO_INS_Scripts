@@ -301,6 +301,70 @@ def print_df():
     mavport.close()
 
 
+def save_params_via_mavlink(mav, output_dir="."):
+    """
+    Fetch all parameters via MAVLink PARAM_VALUE messages and save to a timestamped text file.
+
+    Correctly handles:
+    - INT32
+    - FLOAT32
+    - UINT32 / UINT16
+    """
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(output_dir, f"param_dump_{timestamp}.txt")
+
+    print(f"\n[Action] Requesting all parameters via MAVLink...")
+    mav.param_fetch_all()
+
+    params = {}
+    start = time.time()
+
+    while True:
+        msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=2)
+        if not msg:
+            break
+
+        # Save by param_id to avoid duplicates
+        params[msg.param_id] = msg
+
+        # Stop when all parameters received
+        if len(params) >= msg.param_count:
+            break
+
+        # Safety timeout
+        if time.time() - start > 15:
+            print("[!] Timeout waiting for all parameters")
+            break
+
+    if not params:
+        print("[!] No parameters received")
+        return None
+
+    def format_param(msg):
+        """Return the parameter value in a human-readable form depending on type"""
+        # UINT32 / UINT16 / UINT8
+        if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
+            # reinterpret float bits as unsigned int
+            return struct.unpack('I', struct.pack('f', msg.param_value))[0]
+        # INT32
+        elif msg.param_type == 1:
+            return int(msg.param_value)
+        # FLOAT32
+        elif msg.param_type == 2:
+            return float(msg.param_value)
+        else:
+            return msg.param_value
+
+    # Write to file sorted by parameter name
+    with open(filename, "w") as f:
+        for name in sorted(params):
+            value = format_param(params[name])
+            f.write(f"{name} {value}\n")
+
+    print(f"[OK] Saved {len(params)} parameters to {filename}")
+    return filename
+
+
 
 
 if __name__ == "__main__":
@@ -317,6 +381,8 @@ if __name__ == "__main__":
 
     erase_logs(mav_serialport)
     time.sleep(0.5)
+
+    save_params_via_mavlink(mav_serialport.mav)
 
     mav_serialport.close()
 
