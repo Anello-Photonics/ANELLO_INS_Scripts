@@ -6,6 +6,7 @@ import serial
 import serial.tools.list_ports
 from pymavlink import mavutil
 from PCANBasic import *
+import re
 
 # ---------------- User Settings ---------------- #
 ETH_IP = "192.168.0.3"
@@ -78,18 +79,25 @@ class MavlinkSerialPort():
         return ''
 
 # ============================================================
-#  Ethernet Ping
+#  Ethernet Check (MAVLink connectivity only)
 # ============================================================
-def check_ethernet_ping(ip=ETH_IP):
-    print("\n=== Checking Ethernet (Ping) ===")
-    param = "-n" if sys.platform.startswith("win") else "-c"
-    cmd = ["ping", param, "1", ip]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode == 0:
-        print(f"[OK] Ping reply from {ip}")
+def check_ethernet():
+    print("\n=== Checking Ethernet (MAVLink UDP) ===")
+
+    try:
+        mav_port = MavlinkSerialPort(
+            "udp:0.0.0.0:14550",
+            57600,
+            devnum=10
+        )
+        print("[OK] MAVLink connection established over Ethernet")
+        mav_port.close()
         return True
-    print(f"[FAIL] No ping response from {ip}")
-    return False
+
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink UDP port: {e}")
+        return False
+
 
 # ============================================================
 #  Enable MAVLink on Serial Ports
@@ -330,7 +338,7 @@ def main():
     factory_mode(False)
 
     # Ethernet
-    results["ethernet"] = check_ethernet_ping()
+    results["ethernet"] = check_ethernet()
     if results["ethernet"]:
         enable_mavlink()
         time.sleep(1.0)
