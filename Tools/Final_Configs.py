@@ -195,6 +195,8 @@ def set_final_configs(mav_serialport, timeout=1.0):
         "param set NM2K_CFG 1",
         "param set NM0183_CFG 0",
         "param set MAV_0_CONFIG 101",
+        "param set SER_TEL1_BAUD 57600",
+        "param set SER_TEL2_BAUD 57600",
         "param set GPS_SEP_BASE_X 0.0",
         "param set GPS_SEP_BASE_Y 0.0",
         "param set GPS_SEP_BASE_Z 0.0",

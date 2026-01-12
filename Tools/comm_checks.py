@@ -102,7 +102,10 @@ def enable_mavlink():
 
         commands = [
             "mavlink start -d /dev/ttyS6 -b 57600 -m 0 -f 1 -r 0\n",  # RS232-1
-            "mavlink start -d /dev/ttyS5 -b 57600 -m 0 -f 1 -r 0\n"   # RS232-2
+            "mavlink start -d /dev/ttyS5 -b 57600 -m 0 -f 1 -r 0\n",   # RS232-2
+            "param set MAV_0_CFG 101",
+            "param set MAV_1_CFG 102",
+            "reboot"
         ]
 
         for cmd in commands:
@@ -335,6 +338,7 @@ def main():
 
     # RS232
     coms = detect_com_ports()
+    enable_mavlink()
     results["rs232"] = check_rs232_verhw(coms)
 
     # CAN
