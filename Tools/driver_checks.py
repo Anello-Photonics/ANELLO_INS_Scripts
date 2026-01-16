@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
+
 import time
-import sys
-import subprocess
+import socket
+import subprocess  # kept in case you want later use
 import serial
 import serial.tools.list_ports
 from pymavlink import mavutil
@@ -10,172 +10,298 @@ import re
 
 # ---------------- User Settings ---------------- #
 ETH_IP = "192.168.0.3"
-RS232_BAUD = 57600
-RS232_TIMEOUT = 3.0
 
+# MAVLink shell
+MAVLINK_SHELL = "udp:0.0.0.0:14550"
+MAVLINK_BAUD = 57600
+MAV_DEVNUM = 10
+SHELL_DEBUG = 0
+
+# NMEA UDP injection (PAP*)
+UDP_NMEA_PORT = 19551
+PAPPOS = "PAPPOS,,37.335390,-122.026130,12.30,2.0,3.5"
+PAPRPH = "PAPRPH,203600.00,0.80,1.50,273.20,0.20,0.20,0.50"
+
+# CAN / NMEA2000
 CAN_PGN = 127257
+PCAN_CHANNEL = PCAN_USBBUS1
+PCAN_BITRATE = PCAN_BAUD_250K
+
+POST_REBOOT_WAIT_S = 10
+
 
 # ============================================================
-#  MavlinkSerialPort Class
+#  MavlinkSerialPort Class (SERIAL_CONTROL shell)
 # ============================================================
-class MavlinkSerialPort():
-    """An object that looks like a serial port, but transmits using MAVLink SERIAL_CONTROL packets"""
+class MavlinkSerialPort:
+    """Serial-like interface implemented via MAVLink SERIAL_CONTROL packets."""
+
     def __init__(self, portname, baudrate, devnum=0, debug=0):
-        self.baudrate = 0
         self._debug = debug
-        self.buf = ''
+        self.buf = b""
         self.port = devnum
-        self.debug(f"Connecting with MAVLink to {portname} ...")
+
+        self.debug(f"Connecting with MAVLink to {portname} ...", 1)
         self.mav = mavutil.mavlink_connection(portname, autoreconnect=True, baud=baudrate)
-        self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC,
-                                    mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+
+        # Kick heartbeat so some systems respond quickly
+        self.mav.mav.heartbeat_send(
+            mavutil.mavlink.MAV_TYPE_GENERIC,
+            mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
+        )
         self.mav.wait_heartbeat()
-        self.debug("HEARTBEAT OK\n")
-        self.debug("Locked serial device\n")
+        self.debug("HEARTBEAT OK\nLocked serial device\n", 1)
 
     def debug(self, s, level=1):
         if self._debug >= level:
             print(s)
 
-    def write(self, b):
-        self.debug(f"sending '{b}' of len {len(b)}", 2)
-        while len(b) > 0:
-            n = min(len(b), 70)
-            buf = [ord(x) for x in b[:n]] + [0] * (70 - n)
+    def write(self, data):
+        # Accept str or bytes
+        if isinstance(data, str):
+            data = data.encode("utf-8", errors="replace")
+
+        while len(data) > 0:
+            n = min(len(data), 70)
+            chunk = data[:n]
+            buf = list(chunk) + [0] * (70 - n)
+
             self.mav.mav.serial_control_send(
                 self.port,
-                mavutil.mavlink.SERIAL_CONTROL_FLAG_EXCLUSIVE | mavutil.mavlink.SERIAL_CONTROL_FLAG_RESPOND,
+                mavutil.mavlink.SERIAL_CONTROL_FLAG_EXCLUSIVE
+                | mavutil.mavlink.SERIAL_CONTROL_FLAG_RESPOND,
                 0,
                 0,
                 n,
-                buf
+                buf,
             )
-            b = b[n:]
+            data = data[n:]
 
     def close(self):
-        self.mav.mav.serial_control_send(self.port, 0, 0, 0, 0, [0]*70)
+        # release exclusive access
+        self.mav.mav.serial_control_send(self.port, 0, 0, 0, 0, [0] * 70)
 
-    def _recv(self):
-        m = self.mav.recv_match(condition='SERIAL_CONTROL.count!=0',
-                                type='SERIAL_CONTROL', blocking=True,
-                                timeout=0.03)
-        if m is not None:
-            if self._debug > 2:
-                print(m)
-            data = m.data[:m.count]
-            self.buf += ''.join(chr(x) for x in data)
+    def _recv_once(self, timeout=0.05):
+        m = self.mav.recv_match(
+            condition="SERIAL_CONTROL.count!=0",
+            type="SERIAL_CONTROL",
+            blocking=True,
+            timeout=timeout,
+        )
+        if m is None:
+            return
+        data = bytes(m.data[:m.count])
+        if data:
+            self.buf += data
 
-    def read(self, n):
-        if len(self.buf) == 0:
-            self._recv()
-        if len(self.buf) > 0:
-            n = min(n, len(self.buf))
-            ret = self.buf[:n]
-            self.buf = self.buf[n:]
-            if self._debug >= 2:
-                for b in ret:
-                    self.debug(f"read 0x{ord(b):x}", 2)
-            return ret
-        return ''
+    def read_bytes(self, n):
+        if not self.buf:
+            self._recv_once()
+        if not self.buf:
+            return b""
+        n = min(n, len(self.buf))
+        out = self.buf[:n]
+        self.buf = self.buf[n:]
+        return out
+
+    def flush(self, seconds=0.2):
+        end = time.time() + seconds
+        while time.time() < end:
+            self._recv_once(timeout=0.02)
+            _ = self.read_bytes(4096)
+            time.sleep(0.01)
 
 
 # ============================================================
-#  CAN PGN Check
+#  Shell command runner (marker-based, more reliable)
 # ============================================================
-def check_can_pgn(channel=PCAN_USBBUS1, timeout=5, retries=3):
+def run_shell_command(mavport, cmd, timeout=4.0):
+    """
+    Send PX4 shell command and return output. Uses an end-marker for deterministic capture.
+    """
+    marker = f"__END_{int(time.time() * 1000)}__"
+    full_cmd = f"{cmd}; echo {marker}"
+
+    print(f"\nRunning command: {cmd}")
+
+    mavport.flush(0.25)
+    mavport.write("\n")
+    time.sleep(0.1)
+    mavport.flush(0.1)
+
+    mavport.write(full_cmd + "\n")
+
+    out = b""
+    end = time.time() + timeout
+    while time.time() < end:
+        mavport._recv_once(timeout=0.05)
+        chunk = mavport.read_bytes(4096)
+        if chunk:
+            out += chunk
+            if marker.encode("utf-8") in out:
+                break
+        time.sleep(0.01)
+
+    text = out.decode("utf-8", errors="replace")
+    if marker in text:
+        text = text.split(marker, 1)[0]
+    text = text.strip()
+
+    if text:
+        print(text)
+    else:
+        print("[!] No response received")
+
+    return text
+
+
+# ============================================================
+#  CAN PGN Check (your original logic, slightly hardened)
+# ============================================================
+def check_can_pgn(channel=PCAN_CHANNEL, timeout=5, retries=3):
     print("\n=== Checking CAN (PCAN) ===")
     pcan = PCANBasic()
-    ret = pcan.Initialize(channel, PCAN_BAUD_250K)
+    ret = pcan.Initialize(channel, PCAN_BITRATE)
     if ret != PCAN_ERROR_OK:
         print("[FAIL] PCAN initialization failed.")
         return False
 
     print(f"Listening for PGN {CAN_PGN} (0x{CAN_PGN:X})...")
-    for attempt in range(1, retries + 1):
-        start = time.time()
-        while time.time() - start < timeout:
-            result = pcan.Read(channel)
-            if isinstance(result, tuple):
-                ret_val, msg, *_ = result
-            else:
-                ret_val, msg = result, None
+    try:
+        for attempt in range(1, retries + 1):
+            start = time.time()
+            while time.time() - start < timeout:
+                result = pcan.Read(channel)
+                if isinstance(result, tuple):
+                    ret_val, msg, *_ = result
+                else:
+                    ret_val, msg = result, None
 
-            if ret_val != PCAN_ERROR_OK or msg is None:
-                continue
+                if ret_val != PCAN_ERROR_OK or msg is None:
+                    continue
 
-            can_id = msg.ID
-            pgn = (can_id >> 8) & 0x3FFFF
-            if pgn == CAN_PGN:
-                print(f"[OK] Received PGN {CAN_PGN} from SA {can_id & 0xFF}")
-                pcan.Uninitialize(channel)
-                return True
+                can_id = msg.ID
 
-        print(f"[Attempt {attempt}] No PGN received.")
-        time.sleep(0.5)
+                # Your original extraction:
+                pgn = (can_id >> 8) & 0x3FFFF
 
-    pcan.Uninitialize(channel)
-    print(f"[FAIL] No CAN PGN {CAN_PGN} detected.")
-    return False
+                if pgn == CAN_PGN:
+                    print(f"[OK] Received PGN {CAN_PGN} from SA {can_id & 0xFF}")
+                    return True
 
-# ============================================================
-#  Run Generic Shell Command via MAVLink
-# ============================================================
-def run_shell_command(mav_serialport, cmd, timeout=4.0):
-    """
-    Send MAVLink shell command (e.g., dmesg, df) and return full output.
-    """
-    print(f"\nRunning command: {cmd}")
+            print(f"[Attempt {attempt}] No PGN received.")
+            time.sleep(0.5)
 
-    # Wake shell
-    mav_serialport.write("\n")
-    time.sleep(0.2)
-
-    # Send command
-    mav_serialport.write(cmd + "\n")
-    time.sleep(0.2)
-
-    # Collect output
-    output = ""
-    start = time.time()
-
-    while time.time() - start < timeout:
-        mav_serialport._recv()
-        chunk = mav_serialport.read(4096)
-        if chunk:
-            output += chunk
-        time.sleep(0.05)
-
-    output = output.strip()
-    if output:
-        print(output)
-    else:
-        print("[!] No response received")
-
-    return output
-
+        print(f"[FAIL] No CAN PGN {CAN_PGN} detected.")
+        return False
+    finally:
+        pcan.Uninitialize(channel)
 
 
 # ============================================================
 #  Enable CAN PGN output
 # ============================================================
 def enable_CAN():
-
-
     try:
-        mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+        mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
     except Exception as e:
         print(f"[FAIL] Could not open MAVLink shell for diagnostics: {e}")
-        return
+        return False
+
+    try:
+        run_shell_command(mavport, "param set NM2K_CFG 1", timeout=6)
+        run_shell_command(mavport, "param set NM2K_BITRATE 250000", timeout=6)
+        run_shell_command(mavport, "param set NM2K_127257_RATE 10", timeout=6)
+        run_shell_command(mavport, "reboot", timeout=6)
+        return True
+    finally:
+        try:
+            mavport.close()
+        except Exception:
+            pass
 
 
-    run_shell_command(mavport, "param set NM2K_CFG 1", timeout=6)
-    run_shell_command(mavport, "param set NM2K_BITRATE 250000", timeout=6)
-    run_shell_command(mavport, "param set NM2K_127257_RATE 10", timeout=6)
-    run_shell_command(mavport, "reboot", timeout=6)
-    
+# ============================================================
+#  Enable NMEA0183 UDP input 
+# ============================================================
+def enable_NM0183_NAV():
+    try:
+        mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell for diagnostics: {e}")
+        return False
+
+    try:
+        # You had "param NMEA_UDP_EN" (ambiguous). This enables it explicitly.
+        run_shell_command(mavport, "param set NMEA_UDP_EN 1", timeout=6)
+        run_shell_command(mavport, "param set NMEA_UDP_ODR_GGA 10", timeout=6)
+        run_shell_command(mavport, "param set NMEA_UDP_ODR_RMC 10", timeout=6)
+        run_shell_command(mavport, "reboot", timeout=6)
+        return True
+    finally:
+        try:
+            mavport.close()
+        except Exception:
+            pass
 
 
-    mavport.close()
+# ============================================================
+#  NMEA UDP injection (PAPPOS / PAPRPH)
+# ============================================================
+def nmea_checksum(sentence: str) -> str:
+    csum = 0
+    for ch in sentence:
+        csum ^= ord(ch)
+    return f"{csum:02X}"
+
+
+def send_nmea_udp(ip, port, sentences, inter_msg_delay_s=0.1):
+    print("\n=== Sending PAPPOS / PAPRPH over UDP ===")
+    addr = (ip, port)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for s in sentences:
+            msg = f"${s}*{nmea_checksum(s)}\r\n"
+            sock.sendto(msg.encode("ascii"), addr)
+            print("Sent:", msg.strip())
+            time.sleep(inter_msg_delay_s)
+    finally:
+        sock.close()
+
+
+# ============================================================
+#  aux_global_position check (injected)
+# ============================================================
+def check_aux_global_position(timeout=6.0):
+    """
+    Connects to MAVLink shell and runs `listener aux_global_position`.
+    PASS if it doesn't say "not found" and prints expected fields (timestamp/lat/lon).
+    """
+    print("\n=== Checking aux_global_position topic ===")
+    try:
+        mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell for aux_global_position check: {e}")
+        return False
+
+    try:
+        out = run_shell_command(mavport, "listener aux_global_position", timeout=timeout)
+        low = out.lower()
+        if "not found" in low or "unknown uorb topic" in low:
+            print("[FAIL] aux_global_position topic not created")
+            return False
+
+        if "timestamp" in low or "lat" in low or "lon" in low:
+            print("[OK] aux_global_position appears to be published")
+            return True
+
+        print("[FAIL] aux_global_position may exist but did not show expected fields")
+        return False
+    finally:
+        try:
+            mavport.close()
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -183,24 +309,37 @@ def enable_CAN():
 # ============================================================
 def main():
     results = {
-        "nmea0183": False,
-        "j1939": {},
-        "nmea2000": False
+        "nmea2000_pgn": False,
+        "udp_sent": False,
+        "aux_global_position": False,
     }
 
+    # 1) Configure CAN/NMEA2000 output and reboot
+    can_cfg_ok = enable_CAN()
+    time.sleep(POST_REBOOT_WAIT_S)
 
+    # 2) Check CAN PGN on PCAN
+    if can_cfg_ok:
+        results["nmea2000_pgn"] = check_can_pgn()
+    else:
+        results["nmea2000_pgn"] = False
 
-    # CAN
-    enable_CAN()
-    results["nmea2000"] = check_can_pgn()
+    # 3) Send PAP messages over UDP (PAPPOS then PAPRPH)
+    send_nmea_udp(ETH_IP, UDP_NMEA_PORT, [PAPPOS, PAPRPH], inter_msg_delay_s=0.1)
+    results["udp_sent"] = True
+
+    # Give driver time to parse/publish
+    time.sleep(0.5)
+
+    # 4) Check aux_global_position topic created
+    results["aux_global_position"] = check_aux_global_position(timeout=6.0)
 
     # Summary
     print("\n==================== SUMMARY ====================")
-    
-    
-    print(f"\nCAN NMEA2000 {CAN_PGN}: {'[OK]' if results['nmea2000'] else '[FAIL]'}")
+    print(f"CAN NMEA2000 PGN {CAN_PGN}: {'[OK]' if results['nmea2000_pgn'] else '[FAIL]'}")
+    print(f"UDP PAPPOS/PAPRPH sent:     {'[OK]' if results['udp_sent'] else '[FAIL]'}")
+    print(f"aux_global_position:        {'[OK]' if results['aux_global_position'] else '[FAIL]'}")
     print("=================================================\n")
-
 
 
 if __name__ == "__main__":
