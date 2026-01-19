@@ -295,6 +295,54 @@ def run_shell_command(mav_serialport, cmd, timeout=4.0):
     return output
 
 
+def run_ver_all_command(mav_serialport, timeout=4.0):
+    """
+    Send 'ver all' command via MAVLink SERIAL_CONTROL and return the output.
+    """
+    print("\nRunning command: ver all")
+
+    # Wake shell
+    mav_serialport.write("\n")
+    time.sleep(0.2)
+
+    # Send command
+    mav_serialport.write("ver all\n")
+    time.sleep(0.2)
+
+    # Collect output
+    output = ""
+    start = time.time()
+
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        chunk = mav_serialport.read(4096)
+        if chunk:
+            output += chunk
+        time.sleep(0.05)
+
+    output = output.strip()
+    if output:
+        print(output)
+    else:
+        print("[!] No response received")
+
+    return output
+
+
+def print_ver_all_summary(ver_all_output):
+    """
+    Print selected fields from ver all output.
+    """
+    fields = ("HW arch", "PX4 git-hash", "PX4 version", "Build datetime")
+    print("\n==== ver all Summary ====")
+    for field in fields:
+        match = re.search(rf"^\s*{re.escape(field)}\s*:\s*(.+)$", ver_all_output, re.MULTILINE)
+        if match:
+            print(f"{field}: {match.group(1).strip()}")
+        else:
+            print(f"{field}: [Not found]")
+
+
 # ============================================================
 #  Print dmesg + df diagnostics
 # ============================================================
@@ -317,6 +365,26 @@ def print_dmesg_and_df():
     run_shell_command(mavport, "df -h", timeout=3)
 
     print("\n====================================================\n")
+
+    mavport.close()
+
+
+def print_ver_all():
+    """
+    Connect via MAVLink and print ver all summary output.
+    """
+    print("\n================ VER ALL SUMMARY ================\n")
+
+    try:
+        mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell for ver all: {e}")
+        return
+
+    ver_all_output = run_ver_all_command(mavport, timeout=6)
+    print_ver_all_summary(ver_all_output)
+
+    print("\n=================================================\n")
 
     mavport.close()
 
@@ -374,6 +442,7 @@ def main():
     enable_mavlink()
     time.sleep(1.0)
     print_dmesg_and_df()   # ← ADD THIS
+    print_ver_all()
 
     # RS232
     coms = detect_com_ports()
