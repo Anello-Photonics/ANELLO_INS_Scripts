@@ -177,7 +177,17 @@ def run_ver_mcu_command(mav_serialport, timeout=3.0):
 
 
 
-def set_final_configs(mav_serialport, timeout=1.0):
+def prompt_serial_number():
+    while True:
+        serial_number = input("Enter full serial number: ").strip()
+        digits = re.sub(r"\D", "", serial_number)
+        if len(digits) < 7:
+            print("[!] Serial number must contain at least 7 digits.")
+            continue
+        return digits
+
+
+def set_final_configs(mav_serialport, serial_number, timeout=1.0):
     """
     Sets all lever arm parameters via MAVLink shell commands
     and prints the responses.
@@ -188,9 +198,14 @@ def set_final_configs(mav_serialport, timeout=1.0):
     print("Setting Final Configurations for Maritime INS...")
 
 
+    serial_year = serial_number[:4]
+    serial_tail = serial_number[-3:]
+
     final_configs = [
         "param set IMU_MB_C_FACTORY 0",
-        "param set IMU_MB_C_FTOG 1"
+        "param set IMU_MB_C_FTOG 1",
+        f"param set IMU_MB_C_SN {serial_tail}",
+        f"param set IMU_MB_C_YR {serial_year}",
         "param set SYS_AUTOSTART 60009",
         "param set NM2K_CFG 1",
         "param set NM0183_CFG 0",
@@ -380,7 +395,8 @@ if __name__ == "__main__":
 
     time.sleep(0.5)
 
-    set_final_configs(mav_serialport)
+    serial_number = prompt_serial_number()
+    set_final_configs(mav_serialport, serial_number)
     time.sleep(0.5)
 
     erase_logs(mav_serialport)
@@ -389,4 +405,3 @@ if __name__ == "__main__":
     save_params_via_mavlink(mav_serialport.mav)
 
     mav_serialport.close()
-
