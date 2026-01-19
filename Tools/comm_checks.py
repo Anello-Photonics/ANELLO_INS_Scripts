@@ -15,6 +15,24 @@ RS232_TIMEOUT = 3.0
 
 CAN_PGN = 127257
 
+# ---------------- Serial Number Settings ---------------- #
+def prompt_serial_number():
+    while True:
+        serial_number = input("Enter full serial number: ").strip()
+        digits = re.sub(r"\D", "", serial_number)
+        if len(digits) < 7:
+            print("[!] Serial number must contain at least 7 digits.")
+            continue
+        return digits
+
+
+def set_serial_number(mav_serialport, serial_number, timeout=2.0):
+    print("Setting serial number parameters...")
+    serial_year = serial_number[:4]
+    serial_tail = serial_number[-4:]
+    run_shell_command(mav_serialport, f"param set IMU_MB_C_SN {serial_tail}", timeout=timeout)
+    run_shell_command(mav_serialport, f"param set IMU_MB_C_YR {serial_year}", timeout=timeout)
+
 # ============================================================
 #  MavlinkSerialPort Class
 # ============================================================
@@ -334,15 +352,28 @@ def main():
         "rs232": {},
         "can": False
     }
+    # Ethernet
+    results["ethernet"] = check_ethernet()
+    if not results["ethernet"]:
+        print("[FAIL] Ethernet unreachable. Aborting checks.")
+        return
+
+    # Serial number prompt + settings
+    serial_number = prompt_serial_number()
+    try:
+        mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell to set serial number: {e}")
+        return
+    set_serial_number(mavport, serial_number)
+    mavport.close()
+
     # disable factory mode
     factory_mode(False)
 
-    # Ethernet
-    results["ethernet"] = check_ethernet()
-    if results["ethernet"]:
-        enable_mavlink()
-        time.sleep(1.0)
-        print_dmesg_and_df()   # ← ADD THIS
+    enable_mavlink()
+    time.sleep(1.0)
+    print_dmesg_and_df()   # ← ADD THIS
 
     # RS232
     coms = detect_com_ports()
