@@ -320,7 +320,7 @@ def print_df():
     mavport.close()
 
 
-def save_params_via_mavlink(mav, output_dir="."):
+def save_params_via_mavlink(mav, serial_number, output_dir="."):
     """
     Fetch all parameters via MAVLink PARAM_VALUE messages and save to a timestamped text file.
 
@@ -330,7 +330,7 @@ def save_params_via_mavlink(mav, output_dir="."):
     - UINT32 / UINT16
     """
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(output_dir, f"param_dump_{timestamp}.txt")
+    filename = os.path.join(output_dir, f"param_dump_{serial_number}_{timestamp}.txt")
 
     print(f"\n[Action] Requesting all parameters via MAVLink...")
     mav.param_fetch_all()
@@ -402,6 +402,6 @@ if __name__ == "__main__":
     erase_logs(mav_serialport)
     time.sleep(0.5)
 
-    save_params_via_mavlink(mav_serialport.mav)
+    save_params_via_mavlink(mav_serialport.mav, serial_number)
 
     mav_serialport.close()
