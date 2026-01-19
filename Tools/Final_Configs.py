@@ -199,7 +199,7 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
 
 
     serial_year = serial_number[:4]
-    serial_tail = serial_number[-3:]
+    serial_tail = serial_number[-4:]
 
     final_configs = [
         "param set IMU_MB_C_FACTORY 0",
