@@ -176,6 +176,56 @@ def run_ver_mcu_command(mav_serialport, timeout=3.0):
     return output
 
 
+def run_ver_all_command(mav_serialport, timeout=3.0):
+    """
+    Send 'ver all' command via MAVLink SERIAL_CONTROL and return the output.
+    """
+    print("Sending 'ver all' command...")
+
+    # Wake up the shell
+    mav_serialport.write('\n')
+    time.sleep(0.3)
+
+    # Send the command
+    mav_serialport.write('ver all\n')
+    time.sleep(0.3)
+
+    # Read loop to capture shell output
+    output = ''
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        mav_serialport._recv()  # Pull in SERIAL_CONTROL messages
+        chunk = mav_serialport.read(1024)
+        if chunk:
+            output += chunk
+        time.sleep(0.05)
+
+    output = output.strip()
+
+    if output:
+        print("==== ver all Output ====")
+        print(output)
+    else:
+        print("[!] No response received within timeout.")
+
+    return output
+
+
+def print_ver_all_summary(ver_all_output):
+    """
+    Print selected fields from ver all output.
+    """
+    fields = ("HW arch", "PX4 git-hash", "PX4 version", "Build datetime")
+    print("\n==== ver all Summary ====")
+    for field in fields:
+        match = re.search(rf"^\s*{re.escape(field)}\s*:\s*(.+)$", ver_all_output, re.MULTILINE)
+        if match:
+            print(f"{field}: {match.group(1).strip()}")
+        else:
+            print(f"{field}: [Not found]")
+
+
 
 def prompt_serial_number():
     while True:
@@ -320,7 +370,7 @@ def print_df():
     mavport.close()
 
 
-def save_params_via_mavlink(mav, serial_number, output_dir="."):
+def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=None):
     """
     Fetch all parameters via MAVLink PARAM_VALUE messages and save to a timestamped text file.
 
@@ -380,6 +430,11 @@ def save_params_via_mavlink(mav, serial_number, output_dir="."):
             value = format_param(params[name])
             f.write(f"{name} {value}\n")
 
+        if ver_all_output:
+            f.write("\n==== ver all Output ====\n")
+            f.write(ver_all_output)
+            f.write("\n")
+
     print(f"[OK] Saved {len(params)} parameters to {filename}")
     return filename
 
@@ -402,6 +457,9 @@ if __name__ == "__main__":
     erase_logs(mav_serialport)
     time.sleep(0.5)
 
-    save_params_via_mavlink(mav_serialport.mav, serial_number)
+    ver_all_output = run_ver_all_command(mav_serialport)
+    print_ver_all_summary(ver_all_output)
+
+    save_params_via_mavlink(mav_serialport.mav, serial_number, ver_all_output=ver_all_output)
 
     mav_serialport.close()
