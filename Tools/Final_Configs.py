@@ -226,6 +226,25 @@ def print_ver_all_summary(ver_all_output):
             print(f"{field}: [Not found]")
 
 
+def sanitize_ver_all_output(ver_all_output):
+    """
+    Strip ANSI escape sequences, shell prompts, and other control characters.
+    """
+    if not ver_all_output:
+        return ver_all_output
+
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+    cleaned = ansi_escape.sub("", ver_all_output)
+    cleaned = "".join(ch for ch in cleaned if ch == "\n" or ch == "\t" or ord(ch) >= 32)
+
+    lines = []
+    for line in cleaned.splitlines():
+        if line.strip().startswith("nsh>"):
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
 
 def prompt_serial_number():
     while True:
@@ -432,7 +451,7 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
 
         if ver_all_output:
             f.write("\n==== ver all Output ====\n")
-            f.write(ver_all_output)
+            f.write(sanitize_ver_all_output(ver_all_output))
             f.write("\n")
 
     print(f"[OK] Saved {len(params)} parameters to {filename}")
