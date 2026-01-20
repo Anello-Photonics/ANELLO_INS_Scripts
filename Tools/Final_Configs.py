@@ -247,7 +247,18 @@ def prompt_serial_number():
         return digits
 
 
-def set_final_configs(mav_serialport, serial_number, timeout=1.0):
+def prompt_ser_tel2_baud(default=57600):
+    while True:
+        response = input(f"Enter SER_TEL2_BAUD [{default}]: ").strip()
+        if not response:
+            return default
+        try:
+            return int(response)
+        except ValueError:
+            print("[!] SER_TEL2_BAUD must be an integer.")
+
+
+def set_final_configs(mav_serialport, serial_number, ser_tel2_baud, timeout=1.0):
     """
     Sets all lever arm parameters via MAVLink shell commands
     and prints the responses.
@@ -271,7 +282,7 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("NM0183_CFG", 0),
         ("MAV_0_CONFIG", 101),
         ("SER_TEL1_BAUD", 57600),
-        ("SER_TEL2_BAUD", 57600),
+        ("SER_TEL2_BAUD", ser_tel2_baud),
         ("GPS_SEP_BASE_X", 0.0),
         ("GPS_SEP_BASE_Y", 0.0),
         ("GPS_SEP_BASE_Z", 0.0),
@@ -549,7 +560,7 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
     return formatted_params
 
 
-def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=None):
+def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=None, extra_params=None):
     """
     Fetch all parameters via MAVLink PARAM_REQUEST_LIST and save to a timestamped text file.
 
@@ -566,6 +577,9 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
     if not params:
         print("[!] No parameters received")
         return None
+
+    if extra_params:
+        params.update(extra_params)
 
     # Write to file sorted by parameter name
     with open(filename, "w") as f:
@@ -593,7 +607,8 @@ if __name__ == "__main__":
     time.sleep(0.5)
 
     serial_number = prompt_serial_number()
-    expected_params = set_final_configs(mav_serialport, serial_number)
+    ser_tel2_baud = prompt_ser_tel2_baud()
+    expected_params = set_final_configs(mav_serialport, serial_number, ser_tel2_baud)
     time.sleep(0.5)
 
     reboot(mav_serialport)
@@ -608,7 +623,8 @@ if __name__ == "__main__":
     filename = save_params_via_mavlink(
         mav_serialport.mav,
         serial_number,
-        ver_all_output=ver_all_output
+        ver_all_output=ver_all_output,
+        extra_params={"SER_TEL2_BAUD": ser_tel2_baud}
     )
     if filename:
         verify_expected_params_from_file(expected_params, filename)
