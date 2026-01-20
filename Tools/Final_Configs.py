@@ -212,18 +212,28 @@ def run_ver_all_command(mav_serialport, timeout=3.0):
     return output
 
 
+def extract_ver_all_summary(ver_all_output):
+    """
+    Extract selected fields from ver all output.
+    """
+    fields = ("HW arch", "PX4 git-hash", "PX4 version", "Build datetime")
+    summary = []
+    for field in fields:
+        match = re.search(rf"^\s*{re.escape(field)}\s*:\s*(.+)$", ver_all_output, re.MULTILINE)
+        if match:
+            summary.append((field, match.group(1).strip()))
+        else:
+            summary.append((field, "[Not found]"))
+    return summary
+
+
 def print_ver_all_summary(ver_all_output):
     """
     Print selected fields from ver all output.
     """
-    fields = ("HW arch", "PX4 git-hash", "PX4 version", "Build datetime")
     print("\n==== ver all Summary ====")
-    for field in fields:
-        match = re.search(rf"^\s*{re.escape(field)}\s*:\s*(.+)$", ver_all_output, re.MULTILINE)
-        if match:
-            print(f"{field}: {match.group(1).strip()}")
-        else:
-            print(f"{field}: [Not found]")
+    for field, value in extract_ver_all_summary(ver_all_output):
+        print(f"{field}: {value}")
 
 
 def sanitize_ver_all_output(ver_all_output):
@@ -339,46 +349,39 @@ def reboot_autopilot(mav_serialport):
     return True
 
 
-def get_params_via_mavlink(mav, timeout=15):
-    mav.param_fetch_all()
+def parse_param_value(value):
+    try:
+        if "." in value or "e" in value.lower():
+            return float(value)
+        return int(value)
+    except (ValueError, AttributeError):
+        return value
 
+
+def load_params_from_file(filename):
     params = {}
-    start = time.time()
-
-    while True:
-        msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=2)
-        if not msg:
-            break
-
-        params[msg.param_id] = msg
-
-        if len(params) >= msg.param_count:
-            break
-
-        if time.time() - start > timeout:
-            print("[!] Timeout waiting for all parameters")
-            break
-
-    if not params:
+    try:
+        with open(filename, "r") as f:
+            for line in f:
+                if line.startswith("===="):
+                    break
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split(None, 1)
+                if len(parts) != 2:
+                    continue
+                params[parts[0]] = parse_param_value(parts[1])
+    except FileNotFoundError:
         return None
-
-    def format_param(msg):
-        if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
-            return struct.unpack('I', struct.pack('f', msg.param_value))[0]
-        if msg.param_type == 1:
-            return int(msg.param_value)
-        if msg.param_type == 2:
-            return float(msg.param_value)
-        return msg.param_value
-
-    return {name: format_param(params[name]) for name in params}
+    return params
 
 
-def verify_expected_params(mav, expected_params, tolerance=1e-3):
-    print("\n[Action] Verifying parameter values after reboot...")
-    params = get_params_via_mavlink(mav)
+def verify_expected_params_from_file(expected_params, filename, tolerance=1e-3):
+    print("\n[Action] Verifying parameter values against saved file...")
+    params = load_params_from_file(filename)
     if not params:
-        print("[!] No parameters received for verification.")
+        print("[!] No parameters found for verification.")
         return False
 
     mismatches = []
@@ -564,9 +567,9 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
             f.write(f"{name} {value}\n")
 
         if ver_all_output:
-            f.write("\n==== ver all Output ====\n")
-            f.write(sanitize_ver_all_output(ver_all_output))
-            f.write("\n")
+            f.write("\n==== ver all Summary ====\n")
+            for field, value in extract_ver_all_summary(ver_all_output):
+                f.write(f"{field}: {value}\n")
 
     print(f"[OK] Saved {len(params)} parameters to {filename}")
     return filename
@@ -590,15 +593,18 @@ if __name__ == "__main__":
     reboot_autopilot(mav_serialport)
     time.sleep(1.0)
 
-    verify_expected_params(mav_serialport.mav, expected_params)
-    time.sleep(0.5)
-
     erase_logs(mav_serialport)
     time.sleep(0.5)
 
     ver_all_output = run_ver_all_command(mav_serialport)
     print_ver_all_summary(ver_all_output)
 
-    save_params_via_mavlink(mav_serialport.mav, serial_number, ver_all_output=ver_all_output)
+    filename = save_params_via_mavlink(
+        mav_serialport.mav,
+        serial_number,
+        ver_all_output=ver_all_output
+    )
+    if filename:
+        verify_expected_params_from_file(expected_params, filename)
 
     mav_serialport.close()
