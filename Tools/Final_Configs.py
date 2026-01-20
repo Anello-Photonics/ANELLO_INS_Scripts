@@ -140,42 +140,6 @@ else:
 
 
 
-def run_ver_mcu_command(mav_serialport, timeout=3.0):
-    """
-    Send 'ver mcu' command via MAVLink SERIAL_CONTROL and return the output.
-    """
-    print("Sending 'ver mcu' command...")
-
-    # Wake up the shell
-    mav_serialport.write('\n')
-    time.sleep(0.3)
-
-    # Send the command
-    mav_serialport.write('ver mcu\n')
-    time.sleep(0.3)
-
-    # Read loop to capture shell output
-    output = ''
-    start_time = time.time()
-
-    while time.time() - start_time < timeout:
-        mav_serialport._recv()  # Pull in SERIAL_CONTROL messages
-        chunk = mav_serialport.read(1024)
-        if chunk:
-            output += chunk
-        time.sleep(0.05)
-
-    output = output.strip()
-
-    if output:
-        print("==== ver mcu Output ====")
-        print(output)
-    else:
-        print("[!] No response received within timeout.")
-
-    return output
-
-
 def run_ver_all_command(mav_serialport, timeout=3.0):
     """
     Send 'ver all' command via MAVLink SERIAL_CONTROL and return the output.
@@ -234,30 +198,6 @@ def print_ver_all_summary(ver_all_output):
     print("\n==== ver all Summary ====")
     for field, value in extract_ver_all_summary(ver_all_output):
         print(f"{field}: {value}")
-
-
-def sanitize_ver_all_output(ver_all_output):
-    """
-    Strip ANSI escape sequences, shell prompts, and other control characters.
-    """
-    if not ver_all_output:
-        return ver_all_output
-
-    ansi_escape = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-    cleaned = ansi_escape.sub("", ver_all_output)
-    cleaned = "".join(ch for ch in cleaned if ch == "\n" or ch == "\t" or ord(ch) >= 32)
-
-    lines = []
-    previous_line = None
-    for line in cleaned.splitlines():
-        if line.strip().startswith("nsh>"):
-            continue
-        if line == previous_line:
-            continue
-        lines.append(line)
-        previous_line = line
-
-    return "\n".join(lines).strip()
 
 
 def prompt_serial_number():
@@ -483,27 +423,6 @@ def erase_logs(mav_serialport):
     # Verify
     print("[Verify]")
     print(nsh_cmd(mav_serialport, "ls /fs/microsd/log"))
-
-
-
-def print_df():
-    """
-    Connect via MAVLink and print dmesg / df output.
-    """
-    print("\n================ SYSTEM DIAGNOSTICS ================\n")
-
-    try:
-        mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
-    except Exception as e:
-        print(f"[FAIL] Could not open MAVLink shell for diagnostics: {e}")
-        return
-
-    print("\n-------------------- df ---------------------")
-    run_shell_command(mavport, "df -h", timeout=3)
-
-    print("\n====================================================\n")
-
-    mavport.close()
 
 
 def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
