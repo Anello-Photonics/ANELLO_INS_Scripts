@@ -332,23 +332,9 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
     return dict(final_configs)
 
 
-def reboot_autopilot(mav):
+def reboot_autopilot(mav_serialport):
     print("\n[Action] Rebooting autopilot via MAVLink...")
-    mav.mav.command_long_send(
-        mav.target_system,
-        mav.target_component,
-        mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-    )
-    mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
-    time.sleep(2.0)
+    run_shell_command(mav_serialport, "reboot", timeout=6)
     print("[OK] Reboot wait complete.")
     return True
 
@@ -438,6 +424,38 @@ def nsh_cmd(mav_serialport, cmd, timeout=3.0):
             if "nsh>" in output:
                 break
         time.sleep(0.05)
+
+    return output
+
+def run_shell_command(mav_serialport, cmd, timeout=4.0):
+    """
+    Send MAVLink shell command and return full output.
+    """
+    print(f"\nRunning command: {cmd}")
+
+    # Wake shell
+    mav_serialport.write("\n")
+    time.sleep(0.2)
+
+    # Send command
+    mav_serialport.write(cmd + "\n")
+    time.sleep(0.2)
+
+    output = ""
+    start = time.time()
+
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        chunk = mav_serialport.read(4096)
+        if chunk:
+            output += chunk
+        time.sleep(0.05)
+
+    output = output.strip()
+    if output:
+        print(output)
+    else:
+        print("[!] No response received")
 
     return output
 
@@ -569,7 +587,7 @@ if __name__ == "__main__":
     expected_params = set_final_configs(mav_serialport, serial_number)
     time.sleep(0.5)
 
-    reboot_autopilot(mav_serialport.mav)
+    reboot_autopilot(mav_serialport)
     time.sleep(1.0)
 
     verify_expected_params(mav_serialport.mav, expected_params)
