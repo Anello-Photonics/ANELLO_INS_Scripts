@@ -291,7 +291,7 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("IMU_MB_C_YR", int(serial_year)),
         ("SYS_AUTOSTART", 60009),
         ("NM2K_CFG", 1),
-        ("NM0183_CFG", 0),
+        ("NM0183_CFG", 2),
         ("MAV_0_CONFIG", 101),
         ("SER_TEL1_BAUD", 57600),
         ("SER_TEL2_BAUD", 57600),
@@ -337,7 +337,6 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
             print(output)
         else:
             print("[!] No response received.")
-
     print("\n[Done] All lever arms attempted to be set.")
     return dict(final_configs)
 
@@ -346,6 +345,7 @@ def reboot(mav_serialport):
     print("\n[Action] Rebooting via MAVLink...")
     run_shell_command(mav_serialport, "reboot", timeout=6)
     print("[OK] Reboot wait complete.")
+    run_shell_command(mav_serialport, "param touch SER_TEL2_BAUD", timeout=1)
     return True
 
 
