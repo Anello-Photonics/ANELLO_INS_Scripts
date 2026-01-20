@@ -483,6 +483,39 @@ def print_df():
     mavport.close()
 
 
+def _format_param_value(msg):
+    """Return the parameter value in a human-readable form depending on type."""
+    if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
+        return struct.unpack('I', struct.pack('f', msg.param_value))[0]
+    if msg.param_type == 1:
+        return int(msg.param_value)
+    if msg.param_type == 2:
+        return float(msg.param_value)
+    return msg.param_value
+
+
+def _normalize_param_id(param_id):
+    if isinstance(param_id, bytes):
+        param_id = param_id.decode(errors="ignore")
+    return param_id.strip("\x00 ")
+
+
+def _fetch_param_by_name(mav, name, timeout=5, retries=3):
+    print(f"[Action] Requesting {name} via MAVLink...")
+    param_id = name.encode().ljust(16, b"\x00")
+
+    for attempt in range(1, retries + 1):
+        mav.param_request_read(param_id=param_id, param_index=-1)
+        start = time.time()
+
+        while time.time() - start < timeout:
+            msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
+            if msg and _normalize_param_id(msg.param_id) == name:
+                return _format_param_value(msg)
+        print(f"[!] No response received for {name} (attempt {attempt})")
+    return None
+
+
 def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
     print("\n[Action] Requesting all parameters via MAVLink...")
     mav.param_fetch_all()
@@ -496,7 +529,7 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
         if not msg:
             break
 
-        params[msg.param_id] = msg
+        params[_normalize_param_id(msg.param_id)] = msg
         expected_count = msg.param_count
 
         if expected_count is not None and len(params) >= expected_count:
@@ -526,26 +559,16 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
             msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
             if not msg:
                 break
-            params[msg.param_id] = msg
+            params[_normalize_param_id(msg.param_id)] = msg
             if len(params) >= expected_count:
                 break
 
     if len(params) < expected_count:
         print(f"[!] Incomplete parameter set: got {len(params)} of {expected_count}")
 
-    def format_param(msg):
-        """Return the parameter value in a human-readable form depending on type"""
-        if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
-            return struct.unpack('I', struct.pack('f', msg.param_value))[0]
-        if msg.param_type == 1:
-            return int(msg.param_value)
-        if msg.param_type == 2:
-            return float(msg.param_value)
-        return msg.param_value
-
     formatted_params = {}
     for name, msg in params.items():
-        formatted_params[name] = format_param(msg)
+        formatted_params[name] = _format_param_value(msg)
     return formatted_params
 
 
@@ -566,6 +589,10 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
     if not params:
         print("[!] No parameters received")
         return None
+
+    ser_tel2_baud_value = _fetch_param_by_name(mav, "SER_TEL2_BAUD", retries=3)
+    if ser_tel2_baud_value is not None:
+        params["SER_TEL2_BAUD"] = ser_tel2_baud_value
 
     # Write to file sorted by parameter name
     with open(filename, "w") as f:
