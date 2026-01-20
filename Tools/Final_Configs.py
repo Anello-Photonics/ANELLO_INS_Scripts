@@ -275,31 +275,32 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
     serial_tail = serial_number[-4:]
 
     final_configs = [
-        "param set IMU_MB_C_FACTORY 0",
-        "param set IMU_MB_C_FTOG 1",
-        f"param set IMU_MB_C_SN {serial_tail}",
-        f"param set IMU_MB_C_YR {serial_year}",
-        "param set SYS_AUTOSTART 60009",
-        "param set NM2K_CFG 1",
-        "param set NM0183_CFG 0",
-        "param set MAV_0_CONFIG 101",
-        "param set SER_TEL1_BAUD 57600",
-        "param set SER_TEL2_BAUD 57600",
-        "param set GPS_SEP_BASE_X 0.0",
-        "param set GPS_SEP_BASE_Y 0.0",
-        "param set GPS_SEP_BASE_Z 0.0",
-        "param set GPS_SEP_ROVER_X 0.0",
-        "param set GPS_SEP_ROVER_Y 0.0",
-        "param set GPS_SEP_ROVER_Z 0.0",
-        "param set EKF2_IMU_POS_X 0.0",
-        "param set EKF2_IMU_POS_Y 0.0",
-        "param set EKF2_IMU_POS_Z 0.0",
-        "param set SENS_BOARD_ROT 0"
+        ("IMU_MB_C_FACTORY", 0),
+        ("IMU_MB_C_FTOG", 1),
+        ("IMU_MB_C_SN", int(serial_tail)),
+        ("IMU_MB_C_YR", int(serial_year)),
+        ("SYS_AUTOSTART", 60009),
+        ("NM2K_CFG", 1),
+        ("NM0183_CFG", 0),
+        ("MAV_0_CONFIG", 101),
+        ("SER_TEL1_BAUD", 57600),
+        ("SER_TEL2_BAUD", 57600),
+        ("GPS_SEP_BASE_X", 0.0),
+        ("GPS_SEP_BASE_Y", 0.0),
+        ("GPS_SEP_BASE_Z", 0.0),
+        ("GPS_SEP_ROVER_X", 0.0),
+        ("GPS_SEP_ROVER_Y", 0.0),
+        ("GPS_SEP_ROVER_Z", 0.0),
+        ("EKF2_IMU_POS_X", 0.0),
+        ("EKF2_IMU_POS_Y", 0.0),
+        ("EKF2_IMU_POS_Z", 0.0),
+        ("SENS_BOARD_ROT", 0)
     ]
 
 
 
-    for cmd in final_configs:
+    for param_name, param_value in final_configs:
+        cmd = f"param set {param_name} {param_value}"
         print(f"\n[Setting] {cmd}")
 
         # Wake shell
@@ -328,6 +329,104 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
             print("[!] No response received.")
 
     print("\n[Done] All lever arms attempted to be set.")
+    return dict(final_configs)
+
+
+def reboot_autopilot(mav, timeout=15.0):
+    print("\n[Action] Rebooting autopilot via MAVLink...")
+    mav.mav.command_long_send(
+        mav.target_system,
+        mav.target_component,
+        mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    )
+    mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
+
+    start = time.time()
+    while time.time() - start < timeout:
+        heartbeat = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+        if heartbeat:
+            print("[OK] Heartbeat received after reboot.")
+            return True
+
+    print("[!] No heartbeat received after reboot timeout.")
+    return False
+
+
+def get_params_via_mavlink(mav, timeout=15):
+    mav.param_fetch_all()
+
+    params = {}
+    start = time.time()
+
+    while True:
+        msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=2)
+        if not msg:
+            break
+
+        params[msg.param_id] = msg
+
+        if len(params) >= msg.param_count:
+            break
+
+        if time.time() - start > timeout:
+            print("[!] Timeout waiting for all parameters")
+            break
+
+    if not params:
+        return None
+
+    def format_param(msg):
+        if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
+            return struct.unpack('I', struct.pack('f', msg.param_value))[0]
+        if msg.param_type == 1:
+            return int(msg.param_value)
+        if msg.param_type == 2:
+            return float(msg.param_value)
+        return msg.param_value
+
+    return {name: format_param(params[name]) for name in params}
+
+
+def verify_expected_params(mav, expected_params, tolerance=1e-3):
+    print("\n[Action] Verifying parameter values after reboot...")
+    params = get_params_via_mavlink(mav)
+    if not params:
+        print("[!] No parameters received for verification.")
+        return False
+
+    mismatches = []
+    for name, expected_value in expected_params.items():
+        actual_value = params.get(name)
+        if actual_value is None:
+            mismatches.append(f"{name} missing (expected {expected_value})")
+            continue
+        try:
+            if abs(float(actual_value) - float(expected_value)) > tolerance:
+                mismatches.append(
+                    f"{name} expected {expected_value} got {actual_value}"
+                )
+        except (TypeError, ValueError):
+            if actual_value != expected_value:
+                mismatches.append(
+                    f"{name} expected {expected_value} got {actual_value}"
+                )
+
+    if mismatches:
+        print("[!] Parameter verification failed:")
+        for mismatch in mismatches:
+            print(f" - {mismatch}")
+        return False
+
+    print("[OK] All parameters match expected values.")
+    return True
 
 def nsh_cmd(mav_serialport, cmd, timeout=3.0):
     """
@@ -474,7 +573,13 @@ if __name__ == "__main__":
     time.sleep(0.5)
 
     serial_number = prompt_serial_number()
-    set_final_configs(mav_serialport, serial_number)
+    expected_params = set_final_configs(mav_serialport, serial_number)
+    time.sleep(0.5)
+
+    reboot_autopilot(mav_serialport.mav)
+    time.sleep(1.0)
+
+    verify_expected_params(mav_serialport.mav, expected_params)
     time.sleep(0.5)
 
     erase_logs(mav_serialport)
