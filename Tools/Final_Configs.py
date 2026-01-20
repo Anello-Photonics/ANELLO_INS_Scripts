@@ -53,6 +53,17 @@ COMMON_TOPICS = [
     "nmea_engine",
 ]
 
+# Edit your ethernet parameters here
+# ==========================================================================
+eth_cfg = {
+    "NET_CFG_PROTO": 1,                   # 0=None, 1=Static, 2=DHCP, 3=Fallback
+    "NET_CFG_IPADDR": "192.168.0.3",
+    "NET_CFG_NETMASK": "255.255.255.0",
+    "NET_CFG_ROUTER": "192.168.0.254",
+    "NET_CFG_DNS": "192.168.0.254",
+}
+# ==========================================================================
+
 class MavlinkSerialPort():
     '''an object that looks like a serial port, but
     transmits using mavlink SERIAL_CONTROL packets'''
@@ -231,6 +242,9 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("IMU_MB_C_YR", int(serial_year)),
         ("SYS_AUTOSTART", 60009),
         ("NM2K_CFG", 1),
+        ("NM2K_BITRATE", 250000),
+        ("NM2K_127257_RATE", 10),
+        ("CAN_TERM", 1),
         ("NM0183_CFG", 2),
         ("MAV_0_CONFIG", 101),
         ("SER_TEL1_BAUD", 57600),
@@ -244,9 +258,19 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("EKF2_IMU_POS_X", 0.0),
         ("EKF2_IMU_POS_Y", 0.0),
         ("EKF2_IMU_POS_Z", 0.0),
-        ("SENS_BOARD_ROT", 0)
+        ("SENS_BOARD_ROT", 0),
+        ("NMEA_UDP_EN", 1),
+        ("NMEA_UDP_ODR_GGA", 10.000),
+        ("NMEA_UDP_ODR_RMC", 10.000),
+        ("NM0183_ODR_GGA", 10.000),
+        ("NM0183_ODR_RMC", 10.000),
+        ("NMEA_UDP_MC_IP0", 0),
+        ("NMEA_UDP_MC_IP1", 0),
+        ("NMEA_UDP_MC_IP2", 0),
+        ("NMEA_UDP_MC_IP3", 0),
+        ("MAV_2_BROADCAST", 1),
+        ("MAV_2_CONFIG", 1000),
     ]
-
 
 
     for param_name, param_value in final_configs:
@@ -277,8 +301,89 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
             print(output)
         else:
             print("[!] No response received.")
-    print("\n[Done] All lever arms attempted to be set.")
+
+    set_ethernet_params(mav_serialport)
+    time.sleep(0.5)
+    print("\n[Done] All parameters attempted to be set.")
     return dict(final_configs)
+
+# ==================================================================================
+# IPv4 string → signed int32 conversion
+# ==================================================================================
+def ipv4_to_int32(ip_str):
+    """
+    Convert readable IPv4 like '192.168.0.3' into signed 32-bit integer
+
+    """
+    parts = ip_str.split('.')
+    if len(parts) != 4:
+        raise ValueError("Invalid IPv4 address format: %s" % ip_str)
+
+    a, b, c, d = [int(p) for p in parts]
+
+    unsigned32 = (a << 24) | (b << 16) | (c << 8) | d
+
+    # Convert to signed 32-bit
+    if unsigned32 >= (1 << 31):
+        signed32 = unsigned32 - (1 << 32)
+    else:
+        signed32 = unsigned32
+
+    return signed32
+
+
+# ==================================================================================
+# Ethernet parameter setter
+# ==================================================================================
+def set_ethernet_params(mav_serialport, timeout=1.0):
+    """
+    Sets Ethernet configuration parameters via MAVLink shell commands
+    and prints the responses.
+    """
+
+    print("Setting Ethernet parameters...")
+
+
+    # Convert readable IPs into int32 values
+    converted = {}
+    for key, value in eth_cfg.items():
+        if key == "NET_CFG_PROTO":
+            converted[key] = value
+        else:
+            converted[key] = ipv4_to_int32(value)
+
+    # Send the commands
+    for name, val in converted.items():
+        print(f"\n[Setting] {name} = {val}")
+
+        # wake shell
+        mav_serialport.write("\n")
+        time.sleep(0.1)
+
+        # send parameter
+        mav_serialport.write(f"param set {name} {val}\n")
+        time.sleep(0.1)
+
+        # receive response
+        output = ""
+        start = time.time()
+
+        while time.time() - start < timeout:
+            mav_serialport._recv()
+            chunk = mav_serialport.read(1024)
+            if chunk:
+                output += chunk
+            time.sleep(0.05)
+
+        output = output.strip()
+        if output:
+            print(output)
+        else:
+            print("[!] No response received.")
+
+    print("\n[Done] All Ethernet parameters attempted to be set.")
+
+
 
 
 def reboot(mav_serialport):
