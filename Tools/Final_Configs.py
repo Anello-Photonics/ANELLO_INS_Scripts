@@ -63,7 +63,7 @@ class MavlinkSerialPort():
         self.port = devnum
         self.debug("Connecting with MAVLink to %s ..." % portname)
         self.mav = mavutil.mavlink_connection(portname, autoreconnect=True, baud=baudrate)
-        self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+        self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC, mavutil.mavlink.MAV_INVALID, 0, 0, 0)
         self.mav.wait_heartbeat()
         self.debug("HEARTBEAT OK\n")
         self.debug("Locked serial device\n")
@@ -236,29 +236,6 @@ def print_ver_all_summary(ver_all_output):
         print(f"{field}: {value}")
 
 
-def sanitize_ver_all_output(ver_all_output):
-    """
-    Strip ANSI escape sequences, shell prompts, and other control characters.
-    """
-    if not ver_all_output:
-        return ver_all_output
-
-    ansi_escape = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-    cleaned = ansi_escape.sub("", ver_all_output)
-    cleaned = "".join(ch for ch in cleaned if ch == "\n" or ch == "\t" or ord(ch) >= 32)
-
-    lines = []
-    previous_line = None
-    for line in cleaned.splitlines():
-        if line.strip().startswith("nsh>"):
-            continue
-        if line == previous_line:
-            continue
-        lines.append(line)
-        previous_line = line
-
-    return "\n".join(lines).strip()
-
 
 def prompt_serial_number():
     while True:
@@ -342,8 +319,8 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
     return dict(final_configs)
 
 
-def reboot_autopilot(mav_serialport):
-    print("\n[Action] Rebooting autopilot via MAVLink...")
+def reboot(mav_serialport):
+    print("\n[Action] Rebooting via MAVLink...")
     run_shell_command(mav_serialport, "reboot", timeout=6)
     print("[OK] Reboot wait complete.")
     return True
@@ -619,7 +596,7 @@ if __name__ == "__main__":
     expected_params = set_final_configs(mav_serialport, serial_number)
     time.sleep(0.5)
 
-    reboot_autopilot(mav_serialport)
+    reboot(mav_serialport)
     time.sleep(1.0)
 
     erase_logs(mav_serialport)
