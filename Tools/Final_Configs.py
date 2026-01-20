@@ -494,6 +494,12 @@ def _format_param_value(msg):
     return msg.param_value
 
 
+def _normalize_param_id(param_id):
+    if isinstance(param_id, bytes):
+        param_id = param_id.decode(errors="ignore")
+    return param_id.strip("\x00")
+
+
 def _fetch_param_by_name(mav, name, timeout=5):
     print(f"[Action] Requesting {name} via MAVLink...")
     mav.param_request_read(param_id=name.encode(), param_index=-1)
@@ -501,7 +507,7 @@ def _fetch_param_by_name(mav, name, timeout=5):
 
     while time.time() - start < timeout:
         msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
-        if msg and msg.param_id == name:
+        if msg and _normalize_param_id(msg.param_id) == name:
             return _format_param_value(msg)
     print(f"[!] No response received for {name}")
     return None
@@ -520,7 +526,7 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
         if not msg:
             break
 
-        params[msg.param_id] = msg
+        params[_normalize_param_id(msg.param_id)] = msg
         expected_count = msg.param_count
 
         if expected_count is not None and len(params) >= expected_count:
@@ -550,7 +556,7 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
             msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
             if not msg:
                 break
-            params[msg.param_id] = msg
+            params[_normalize_param_id(msg.param_id)] = msg
             if len(params) >= expected_count:
                 break
 
