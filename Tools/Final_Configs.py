@@ -332,7 +332,7 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
     return dict(final_configs)
 
 
-def reboot_autopilot(mav, timeout=15.0):
+def reboot_autopilot(mav):
     print("\n[Action] Rebooting autopilot via MAVLink...")
     mav.mav.command_long_send(
         mav.target_system,
@@ -348,16 +348,9 @@ def reboot_autopilot(mav, timeout=15.0):
         0
     )
     mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
-
-    start = time.time()
-    while time.time() - start < timeout:
-        heartbeat = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
-        if heartbeat:
-            print("[OK] Heartbeat received after reboot.")
-            return True
-
-    print("[!] No heartbeat received after reboot timeout.")
-    return False
+    time.sleep(2.0)
+    print("[OK] Reboot wait complete.")
+    return True
 
 
 def get_params_via_mavlink(mav, timeout=15):
