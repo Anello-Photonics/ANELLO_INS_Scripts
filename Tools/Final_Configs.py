@@ -63,7 +63,7 @@ class MavlinkSerialPort():
         self.port = devnum
         self.debug("Connecting with MAVLink to %s ..." % portname)
         self.mav = mavutil.mavlink_connection(portname, autoreconnect=True, baud=baudrate)
-        self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC, mavutil.mavlink.MAV_INVALID, 0, 0, 0)
+        self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
         self.mav.wait_heartbeat()
         self.debug("HEARTBEAT OK\n")
         self.debug("Locked serial device\n")
@@ -235,6 +235,29 @@ def print_ver_all_summary(ver_all_output):
     for field, value in extract_ver_all_summary(ver_all_output):
         print(f"{field}: {value}")
 
+
+def sanitize_ver_all_output(ver_all_output):
+    """
+    Strip ANSI escape sequences, shell prompts, and other control characters.
+    """
+    if not ver_all_output:
+        return ver_all_output
+
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+    cleaned = ansi_escape.sub("", ver_all_output)
+    cleaned = "".join(ch for ch in cleaned if ch == "\n" or ch == "\t" or ord(ch) >= 32)
+
+    lines = []
+    previous_line = None
+    for line in cleaned.splitlines():
+        if line.strip().startswith("nsh>"):
+            continue
+        if line == previous_line:
+            continue
+        lines.append(line)
+        previous_line = line
+
+    return "\n".join(lines).strip()
 
 
 def prompt_serial_number():
@@ -483,36 +506,6 @@ def print_df():
     mavport.close()
 
 
-def _format_param_value(msg):
-    """Return the parameter value in a human-readable form depending on type."""
-    if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
-        return struct.unpack('I', struct.pack('f', msg.param_value))[0]
-    if msg.param_type == 1:
-        return int(msg.param_value)
-    if msg.param_type == 2:
-        return float(msg.param_value)
-    return msg.param_value
-
-
-def _normalize_param_id(param_id):
-    if isinstance(param_id, bytes):
-        param_id = param_id.decode(errors="ignore")
-    return param_id.strip("\x00")
-
-
-def _fetch_param_by_name(mav, name, timeout=5):
-    print(f"[Action] Requesting {name} via MAVLink...")
-    mav.param_request_read(param_id=name.encode(), param_index=-1)
-    start = time.time()
-
-    while time.time() - start < timeout:
-        msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
-        if msg and _normalize_param_id(msg.param_id) == name:
-            return _format_param_value(msg)
-    print(f"[!] No response received for {name}")
-    return None
-
-
 def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
     print("\n[Action] Requesting all parameters via MAVLink...")
     mav.param_fetch_all()
@@ -526,7 +519,7 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
         if not msg:
             break
 
-        params[_normalize_param_id(msg.param_id)] = msg
+        params[msg.param_id] = msg
         expected_count = msg.param_count
 
         if expected_count is not None and len(params) >= expected_count:
@@ -556,16 +549,26 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
             msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
             if not msg:
                 break
-            params[_normalize_param_id(msg.param_id)] = msg
+            params[msg.param_id] = msg
             if len(params) >= expected_count:
                 break
 
     if len(params) < expected_count:
         print(f"[!] Incomplete parameter set: got {len(params)} of {expected_count}")
 
+    def format_param(msg):
+        """Return the parameter value in a human-readable form depending on type"""
+        if msg.param_type in (6, 5, 9):  # UINT16, UINT8, UINT32
+            return struct.unpack('I', struct.pack('f', msg.param_value))[0]
+        if msg.param_type == 1:
+            return int(msg.param_value)
+        if msg.param_type == 2:
+            return float(msg.param_value)
+        return msg.param_value
+
     formatted_params = {}
     for name, msg in params.items():
-        formatted_params[name] = _format_param_value(msg)
+        formatted_params[name] = format_param(msg)
     return formatted_params
 
 
@@ -586,10 +589,6 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
     if not params:
         print("[!] No parameters received")
         return None
-
-    ser_tel2_baud_value = _fetch_param_by_name(mav, "SER_TEL2_BAUD")
-    if ser_tel2_baud_value is not None:
-        params["SER_TEL2_BAUD"] = ser_tel2_baud_value
 
     # Write to file sorted by parameter name
     with open(filename, "w") as f:
