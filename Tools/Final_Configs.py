@@ -238,10 +238,14 @@ def sanitize_ver_all_output(ver_all_output):
     cleaned = "".join(ch for ch in cleaned if ch == "\n" or ch == "\t" or ord(ch) >= 32)
 
     lines = []
+    previous_line = None
     for line in cleaned.splitlines():
         if line.strip().startswith("nsh>"):
             continue
+        if line == previous_line:
+            continue
         lines.append(line)
+        previous_line = line
 
     return "\n".join(lines).strip()
 
