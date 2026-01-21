@@ -330,17 +330,14 @@ def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=6.0):
                 continue
 
             text = data.decode("ascii", errors="ignore")
-            for line in text.splitlines():
-                line = line.strip()
-                if not line.startswith("$"):
-                    continue
-                sentence_type = line[3:6]
-                if sentence_type == "GGA":
+            matches = re.findall(r"\$..(GGA|RMC),[^\r\n]*", text)
+            for sentence_type in matches:
+                if sentence_type == "GGA" and not found_gga:
                     found_gga = True
-                    print(f"[OK] GGA received from {addr}: {line}")
-                elif sentence_type == "RMC":
+                    print(f"[OK] GGA received from {addr}")
+                elif sentence_type == "RMC" and not found_rmc:
                     found_rmc = True
-                    print(f"[OK] RMC received from {addr}: {line}")
+                    print(f"[OK] RMC received from {addr}")
 
         if found_gga and found_rmc:
             return True
