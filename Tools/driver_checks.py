@@ -28,6 +28,7 @@ PCAN_CHANNEL = PCAN_USBBUS1
 PCAN_BITRATE = PCAN_BAUD_250K
 
 POST_REBOOT_WAIT_S = 10
+NMEA0183_OUTPUT_PORT = 19550
 
 
 # ============================================================
@@ -305,6 +306,57 @@ def check_aux_global_position(timeout=6.0):
 
 
 # ============================================================
+#  NMEA0183 UDP output check (GGA/RMC)
+# ============================================================
+def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=6.0):
+    """
+    Listen on UDP port for NMEA0183 output.
+    PASS if both GGA and RMC sentences are observed within timeout.
+    """
+    print(f"\n=== Checking NMEA0183 UDP output on port {port} (GGA/RMC) ===")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(0.5)
+    sock.bind(("0.0.0.0", port))
+
+    found_gga = False
+    found_rmc = False
+    end_time = time.time() + timeout
+
+    try:
+        while time.time() < end_time and not (found_gga and found_rmc):
+            try:
+                data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+
+            text = data.decode("ascii", errors="ignore")
+            for line in text.splitlines():
+                line = line.strip()
+                if not line.startswith("$"):
+                    continue
+                sentence_type = line[3:6]
+                if sentence_type == "GGA":
+                    found_gga = True
+                    print(f"[OK] GGA received from {addr}: {line}")
+                elif sentence_type == "RMC":
+                    found_rmc = True
+                    print(f"[OK] RMC received from {addr}: {line}")
+
+        if found_gga and found_rmc:
+            return True
+
+        missing = []
+        if not found_gga:
+            missing.append("GGA")
+        if not found_rmc:
+            missing.append("RMC")
+        print(f"[FAIL] Missing NMEA0183 sentences: {', '.join(missing)}")
+        return False
+    finally:
+        sock.close()
+
+
+# ============================================================
 #  MAIN
 # ============================================================
 def main():
@@ -312,6 +364,7 @@ def main():
         "nmea2000_pgn": False,
         "udp_sent": False,
         "aux_global_position": False,
+        "nmea0183_output": False,
     }
 
     # 1) Configure CAN/NMEA2000 output and reboot
@@ -334,11 +387,18 @@ def main():
     # 4) Check aux_global_position topic created
     results["aux_global_position"] = check_aux_global_position(timeout=6.0)
 
+    # 5) Configure NMEA0183 output and check UDP port
+    nmea_cfg_ok = enable_NM0183_NAV()
+    time.sleep(POST_REBOOT_WAIT_S)
+    if nmea_cfg_ok:
+        results["nmea0183_output"] = check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=6.0)
+
     # Summary
     print("\n==================== SUMMARY ====================")
     print(f"CAN NMEA2000 PGN {CAN_PGN}: {'[OK]' if results['nmea2000_pgn'] else '[FAIL]'}")
     print(f"UDP PAPPOS/PAPRPH sent:     {'[OK]' if results['udp_sent'] else '[FAIL]'}")
     print(f"aux_global_position:        {'[OK]' if results['aux_global_position'] else '[FAIL]'}")
+    print(f"NMEA0183 GGA/RMC output:     {'[OK]' if results['nmea0183_output'] else '[FAIL]'}")
     print("=================================================\n")
 
 
