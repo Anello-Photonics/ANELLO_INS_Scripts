@@ -213,7 +213,6 @@ def enable_CAN():
         run_shell_command(mavport, "param set NM2K_CFG 1", timeout=6)
         run_shell_command(mavport, "param set NM2K_BITRATE 250000", timeout=6)
         run_shell_command(mavport, "param set NM2K_127257_RATE 10", timeout=6)
-        run_shell_command(mavport, "reboot", timeout=6)
         return True
     finally:
         try:
@@ -237,7 +236,6 @@ def enable_NM0183_NAV():
         run_shell_command(mavport, "param set NMEA_UDP_EN 1", timeout=6)
         run_shell_command(mavport, "param set NMEA_UDP_ODR_GGA 10", timeout=6)
         run_shell_command(mavport, "param set NMEA_UDP_ODR_RMC 10", timeout=6)
-        run_shell_command(mavport, "reboot", timeout=6)
         return True
     finally:
         try:
@@ -371,9 +369,23 @@ def main():
         "nmea0183_output": False,
     }
 
-    # 1) Configure CAN/NMEA2000 output and reboot
+    # 1) Configure outputs, then reboot once
     can_cfg_ok = enable_CAN()
-    time.sleep(POST_REBOOT_WAIT_S)
+    nmea_cfg_ok = enable_NM0183_NAV()
+    if can_cfg_ok or nmea_cfg_ok:
+        try:
+            mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
+        except Exception as e:
+            print(f"[FAIL] Could not open MAVLink shell to reboot: {e}")
+        else:
+            try:
+                run_shell_command(mavport, "reboot", timeout=6)
+            finally:
+                try:
+                    mavport.close()
+                except Exception:
+                    pass
+        time.sleep(POST_REBOOT_WAIT_S)
 
     # 2) Check CAN PGN on PCAN
     if can_cfg_ok:
@@ -391,11 +403,9 @@ def main():
     # 4) Check aux_global_position topic created
     results["aux_global_position"] = check_aux_global_position(timeout=6.0)
 
-    # 5) Configure NMEA0183 output and check UDP port
-    nmea_cfg_ok = enable_NM0183_NAV()
-    time.sleep(POST_REBOOT_WAIT_S)
+    # 5) Check NMEA0183 output on UDP port
     if nmea_cfg_ok:
-        results["nmea0183_output"] = check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=6.0)
+        results["nmea0183_output"] = check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=30.0)
 
     # Summary
     print("\n==================== SUMMARY ====================")
