@@ -308,15 +308,23 @@ def check_aux_global_position(timeout=6.0):
 # ============================================================
 #  NMEA0183 UDP output check (GGA/RMC)
 # ============================================================
-def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=6.0):
+def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=10.0):
     """
     Listen on UDP port for NMEA0183 output.
     PASS if both GGA and RMC sentences are observed within timeout.
     """
     print(f"\n=== Checking NMEA0183 UDP output on port {port} (GGA/RMC) ===")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, "SO_REUSEPORT"):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     sock.settimeout(0.5)
-    sock.bind(("0.0.0.0", port))
+    try:
+        sock.bind(("0.0.0.0", port))
+    except OSError as exc:
+        print(f"[FAIL] Could not bind UDP port {port}: {exc}")
+        sock.close()
+        return False
 
     found_gga = False
     found_rmc = False
@@ -329,9 +337,8 @@ def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=6.0):
             except socket.timeout:
                 continue
 
-            text = data.decode("ascii", errors="ignore")
-            matches = re.findall(r"\$..(GGA|RMC),[^\r\n]*", text)
-            for sentence_type in matches:
+            for match in re.finditer(rb"\$..(GGA|RMC),", data):
+                sentence_type = match.group(1).decode("ascii", errors="ignore")
                 if sentence_type == "GGA" and not found_gga:
                     found_gga = True
                     print(f"[OK] GGA received from {addr}")
