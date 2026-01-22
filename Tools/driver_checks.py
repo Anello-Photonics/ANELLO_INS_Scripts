@@ -255,7 +255,12 @@ def enable_NM0183_NAV():
 
 
 # ============================================================
-#  NMEA UDP injection (PAPPOS / PAPRPH)
+        mavport = MavlinkSerialPort(
+            MAVLINK_SHELL,
+            MAVLINK_BAUD,
+            devnum=MAV_DEVNUM,
+            debug=SHELL_DEBUG,
+        )
 # ============================================================
 def nmea_checksum(sentence: str) -> str:
     csum = 0
