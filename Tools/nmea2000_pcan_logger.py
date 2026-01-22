@@ -22,13 +22,13 @@ def parse_args():
     parser.add_argument(
         "--channel",
         type=lambda value: int(value, 0),
-        default=int(PCAN_USBBUS1),
+        default=PCAN_USBBUS1.value,
         help="PCAN channel handle (default: PCAN_USBBUS1).",
     )
     parser.add_argument(
         "--bitrate",
         type=lambda value: int(value, 0),
-        default=int(PCAN_BAUD_250K),
+        default=PCAN_BAUD_250K.value,
         help="PCAN bitrate constant (default: PCAN_BAUD_250K).",
     )
     parser.add_argument(
