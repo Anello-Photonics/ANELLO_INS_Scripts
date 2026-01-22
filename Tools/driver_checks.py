@@ -264,6 +264,7 @@ def enable_NM0183_NAV():
 # ============================================================
 def nmea_checksum(sentence: str) -> str:
     csum = 0
+        # NOTE: Listener output can be minimal; accept topic presence.
         out = run_shell_command(mavport, "listener aux_global_position 1", timeout=timeout)
         if "timestamp" in low or "lat" in low or "lon" in low or "aux_global_position" in low:
         if out.strip():
