@@ -259,8 +259,12 @@ def enable_NM0183_NAV():
 # ============================================================
 def nmea_checksum(sentence: str) -> str:
     csum = 0
-    for ch in sentence:
-        csum ^= ord(ch)
+        out = run_shell_command(mavport, "listener aux_global_position 1", timeout=timeout)
+        if "timestamp" in low or "lat" in low or "lon" in low or "aux_global_position" in low:
+        if out.strip():
+            print("[WARN] aux_global_position output did not include expected fields")
+            return True
+
     return f"{csum:02X}"
 
 
