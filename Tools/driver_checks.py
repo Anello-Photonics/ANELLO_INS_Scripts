@@ -374,13 +374,13 @@ def check_aux_global_position(timeout=6.0):
         return False
 
     try:
-        out = run_shell_command(mavport, "listener aux_global_position", timeout=timeout)
+        out = run_shell_command(mavport, "listener aux_global_position 1", timeout=timeout)
         low = out.lower()
         if "not found" in low or "unknown uorb topic" in low:
             print("[FAIL] aux_global_position topic not created")
             return False
 
-        if "timestamp" in low or "lat" in low or "lon" in low:
+        if "topic: aux_global_position" in low or "aux_global_position" in low:
             print("[OK] aux_global_position appears to be published")
             return True
 
