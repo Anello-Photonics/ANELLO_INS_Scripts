@@ -28,6 +28,7 @@ PCAN_CHANNEL = PCAN_USBBUS1
 PCAN_BITRATE = PCAN_BAUD_250K
 
 POST_REBOOT_WAIT_S = 10
+NMEA0183_OUTPUT_PORT = 19550
 
 
 # ============================================================
@@ -212,7 +213,6 @@ def enable_CAN():
         run_shell_command(mavport, "param set NM2K_CFG 1", timeout=6)
         run_shell_command(mavport, "param set NM2K_BITRATE 250000", timeout=6)
         run_shell_command(mavport, "param set NM2K_127257_RATE 10", timeout=6)
-        run_shell_command(mavport, "reboot", timeout=6)
         return True
     finally:
         try:
@@ -236,7 +236,6 @@ def enable_NM0183_NAV():
         run_shell_command(mavport, "param set NMEA_UDP_EN 1", timeout=6)
         run_shell_command(mavport, "param set NMEA_UDP_ODR_GGA 10", timeout=6)
         run_shell_command(mavport, "param set NMEA_UDP_ODR_RMC 10", timeout=6)
-        run_shell_command(mavport, "reboot", timeout=6)
         return True
     finally:
         try:
@@ -305,6 +304,61 @@ def check_aux_global_position(timeout=6.0):
 
 
 # ============================================================
+#  NMEA0183 UDP output check (GGA/RMC)
+# ============================================================
+def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=10.0):
+    """
+    Listen on UDP port for NMEA0183 output.
+    PASS if both GGA and RMC sentences are observed within timeout.
+    """
+    print(f"\n=== Checking NMEA0183 UDP output on port {port} (GGA/RMC) ===")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, "SO_REUSEPORT"):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.settimeout(0.5)
+    try:
+        sock.bind(("0.0.0.0", port))
+    except OSError as exc:
+        print(f"[FAIL] Could not bind UDP port {port}: {exc}")
+        sock.close()
+        return False
+
+    found_gga = False
+    found_rmc = False
+    end_time = time.time() + timeout
+
+    try:
+        while time.time() < end_time and not (found_gga and found_rmc):
+            try:
+                data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+
+            for match in re.finditer(rb"\$..(GGA|RMC),", data):
+                sentence_type = match.group(1).decode("ascii", errors="ignore")
+                if sentence_type == "GGA" and not found_gga:
+                    found_gga = True
+                    print(f"[OK] GGA received from {addr}")
+                elif sentence_type == "RMC" and not found_rmc:
+                    found_rmc = True
+                    print(f"[OK] RMC received from {addr}")
+
+        if found_gga and found_rmc:
+            return True
+
+        missing = []
+        if not found_gga:
+            missing.append("GGA")
+        if not found_rmc:
+            missing.append("RMC")
+        print(f"[FAIL] Missing NMEA0183 sentences: {', '.join(missing)}")
+        return False
+    finally:
+        sock.close()
+
+
+# ============================================================
 #  MAIN
 # ============================================================
 def main():
@@ -312,11 +366,26 @@ def main():
         "nmea2000_pgn": False,
         "udp_sent": False,
         "aux_global_position": False,
+        "nmea0183_output": False,
     }
 
-    # 1) Configure CAN/NMEA2000 output and reboot
+    # 1) Configure outputs, then reboot once
     can_cfg_ok = enable_CAN()
-    time.sleep(POST_REBOOT_WAIT_S)
+    nmea_cfg_ok = enable_NM0183_NAV()
+    if can_cfg_ok or nmea_cfg_ok:
+        try:
+            mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
+        except Exception as e:
+            print(f"[FAIL] Could not open MAVLink shell to reboot: {e}")
+        else:
+            try:
+                run_shell_command(mavport, "reboot", timeout=6)
+            finally:
+                try:
+                    mavport.close()
+                except Exception:
+                    pass
+        time.sleep(POST_REBOOT_WAIT_S)
 
     # 2) Check CAN PGN on PCAN
     if can_cfg_ok:
@@ -334,11 +403,16 @@ def main():
     # 4) Check aux_global_position topic created
     results["aux_global_position"] = check_aux_global_position(timeout=6.0)
 
+    # 5) Check NMEA0183 output on UDP port
+    if nmea_cfg_ok:
+        results["nmea0183_output"] = check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=30.0)
+
     # Summary
     print("\n==================== SUMMARY ====================")
     print(f"CAN NMEA2000 PGN {CAN_PGN}: {'[OK]' if results['nmea2000_pgn'] else '[FAIL]'}")
     print(f"UDP PAPPOS/PAPRPH sent:     {'[OK]' if results['udp_sent'] else '[FAIL]'}")
     print(f"aux_global_position:        {'[OK]' if results['aux_global_position'] else '[FAIL]'}")
+    print(f"NMEA0183 GGA/RMC output:     {'[OK]' if results['nmea0183_output'] else '[FAIL]'}")
     print("=================================================\n")
 
 
