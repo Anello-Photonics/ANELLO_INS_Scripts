@@ -242,6 +242,7 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("IMU_MB_C_YR", int(serial_year)),
         ("SYS_AUTOSTART", 60009),
         ("NM2K_CFG", 1),
+        ("J1939_CFG", 0),
         ("NM2K_BITRATE", 250000),
         ("NM2K_127257_RATE", 10),
         ("CAN_TERM", 1),
@@ -671,7 +672,7 @@ if __name__ == "__main__":
     time.sleep(0.5)
 
     reboot(mav_serialport)
-    time.sleep(1.0)
+    time.sleep(3.0)
 
     erase_logs(mav_serialport)
     time.sleep(1.0)
