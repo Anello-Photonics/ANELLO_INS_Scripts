@@ -674,7 +674,7 @@ if __name__ == "__main__":
     time.sleep(1.0)
 
     erase_logs(mav_serialport)
-    time.sleep(0.5)
+    time.sleep(1.0)
 
     ver_all_output = run_ver_all_command(mav_serialport)
     print_ver_all_summary(ver_all_output)
