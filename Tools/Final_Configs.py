@@ -460,6 +460,9 @@ def nsh_cmd(mav_serialport, cmd, timeout=3.0):
     """
     Send a single NSH command and wait for the nsh> prompt.
     """
+    # Wake shell to avoid dropping the first command
+    mav_serialport.write("\n")
+    time.sleep(0.2)
     mav_serialport.write(cmd + "\n")
 
     output = ""
@@ -520,11 +523,11 @@ def erase_logs(mav_serialport):
     # Delete each dated directory explicitly
     out = nsh_cmd(mav_serialport, "ls /fs/microsd/log")
     for line in out.splitlines():
-        line = line.strip()
-        if re.match(r"\d{4}-\d{2}-\d{2}/", line):
-            folder = "/fs/microsd/log/" + line.rstrip("/")
+        match = re.match(r"^\s*(\d{4}-\d{2}-\d{2})/?\s*$", line)
+        if match:
+            folder = f"/fs/microsd/log/{match.group(1)}"
             print(f"[Deleting] {folder}")
-            print(nsh_cmd(mav_serialport, f'rm -r "{folder}"'))
+            print(nsh_cmd(mav_serialport, f'rm -rf "{folder}"'))
 
     # Verify
     print("[Verify]")
