@@ -460,9 +460,16 @@ def nsh_cmd(mav_serialport, cmd, timeout=3.0):
     """
     Send a single NSH command and wait for the nsh> prompt.
     """
-    # Wake shell to avoid dropping the first command
+    # Wake shell and clear any stale output to avoid dropping the first command
+    mav_serialport.buf = ""
     mav_serialport.write("\n")
-    time.sleep(0.2)
+    start = time.time()
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        if "nsh>" in mav_serialport.buf:
+            break
+        time.sleep(0.05)
+    mav_serialport.buf = ""
     mav_serialport.write(cmd + "\n")
 
     output = ""
@@ -528,6 +535,10 @@ def erase_logs(mav_serialport):
             folder = f"/fs/microsd/log/{match.group(1)}"
             print(f"[Deleting] {folder}")
             print(nsh_cmd(mav_serialport, f'rm -rf "{folder}"'))
+
+    # Remove common log artifacts at microsd root
+    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/logdata.txt"))
+    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/fault_*.log"))
 
     # Verify
     print("[Verify]")
