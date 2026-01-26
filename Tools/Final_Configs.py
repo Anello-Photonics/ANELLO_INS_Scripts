@@ -492,13 +492,19 @@ def run_shell_command(mav_serialport, cmd, timeout=4.0):
     """
     print(f"\nRunning command: {cmd}")
 
-    # Wake shell
+    # Wake shell and wait for prompt to avoid interleaving output
+    mav_serialport.buf = ""
     mav_serialport.write("\n")
-    time.sleep(0.2)
+    start = time.time()
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        if "nsh>" in mav_serialport.buf:
+            break
+        time.sleep(0.05)
 
-    # Send command
+    mav_serialport.buf = ""
     mav_serialport.write(cmd + "\n")
-    time.sleep(0.2)
+    time.sleep(0.1)
 
     output = ""
     start = time.time()
@@ -508,6 +514,8 @@ def run_shell_command(mav_serialport, cmd, timeout=4.0):
         chunk = mav_serialport.read(4096)
         if chunk:
             output += chunk
+            if "nsh>" in output:
+                break
         time.sleep(0.05)
 
     output = output.strip()
@@ -534,7 +542,7 @@ def erase_logs(mav_serialport):
         if match:
             folder = f"/fs/microsd/log/{match.group(1)}"
             print(f"[Deleting] {folder}")
-            print(run_shell_command(mav_serialport, f'rm -rf "{folder}"'))
+            print(run_shell_command(mav_serialport, f'rm -rf "{folder}"', timeout=8.0))
 
     # Remove common log artifacts at microsd root
     print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/logdata.txt"))
