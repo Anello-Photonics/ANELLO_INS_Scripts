@@ -151,40 +151,13 @@ else:
 
 
 
-def run_ver_all_command(mav_serialport, timeout=3.0):
+def run_ver_all_command(mav_serialport, timeout=10.0):
     """
-    Send 'ver all' command via MAVLink SERIAL_CONTROL and return the output.
+    Run 'ver all' via the robust shell command helper.
     """
-    print("Sending 'ver all' command...")
-
-    # Wake up the shell
-    if not wait_for_nsh_prompt(mav_serialport, timeout=timeout):
-        print("[!] NSH prompt not detected before ver all.")
-
-    # Send the command
-    mav_serialport.write('ver all\n')
-    time.sleep(0.3)
-
-    # Read loop to capture shell output
-    output = ''
-    start_time = time.time()
-
-    while time.time() - start_time < timeout:
-        mav_serialport._recv()  # Pull in SERIAL_CONTROL messages
-        chunk = mav_serialport.read(1024)
-        if chunk:
-            output += chunk
-        time.sleep(0.05)
-
-    output = output.strip()
-
-    if output:
-        print("==== ver all Output ====")
-        print(output)
-    else:
-        print("[!] No response received within timeout.")
-
+    output = run_shell_command(mav_serialport, "ver all", timeout=timeout)
     return output
+
 
 
 def extract_ver_all_summary(ver_all_output):
@@ -490,37 +463,47 @@ def nsh_cmd(mav_serialport, cmd, timeout=3.0):
 
     return output
 
-def run_shell_command(mav_serialport, cmd, timeout=4.0):
+def run_shell_command(mav_serialport, cmd, timeout=6.0, idle_after_prompt=0.25):
     """
     Send MAVLink shell command and return full output.
+    More robust: we only stop after we see nsh> AND the stream has been idle briefly.
     """
     print(f"\nRunning command: {cmd}")
 
-    # Wake shell and wait for prompt to avoid interleaving output
+    # Wake shell and drain anything already sitting there
     mav_serialport.buf = ""
-    mav_serialport.write("\n")
-    start = time.time()
-    while time.time() - start < timeout:
-        mav_serialport._recv()
-        if "nsh>" in mav_serialport.buf:
-            break
-        time.sleep(0.05)
+    mav_serialport.write("\r\n")
 
+    # Drain for a short moment to clear stale prompt/output
+    drain_start = time.time()
+    while time.time() - drain_start < 0.3:
+        mav_serialport._recv()
+        _ = mav_serialport.read(4096)
+        time.sleep(0.02)
+
+    # Send command (CRLF matters on some setups)
     mav_serialport.buf = ""
-    mav_serialport.write(cmd + "\n")
-    time.sleep(0.1)
+    mav_serialport.write(cmd + "\r\n")
 
     output = ""
     start = time.time()
+    last_rx = time.time()
+    saw_prompt = False
 
     while time.time() - start < timeout:
         mav_serialport._recv()
         chunk = mav_serialport.read(4096)
         if chunk:
             output += chunk
+            last_rx = time.time()
             if "nsh>" in output:
-                break
-        time.sleep(0.05)
+                saw_prompt = True
+
+        # Only exit once we saw prompt AND then things went quiet
+        if saw_prompt and (time.time() - last_rx) > idle_after_prompt:
+            break
+
+        time.sleep(0.02)
 
     output = output.strip()
     if output:
@@ -529,6 +512,7 @@ def run_shell_command(mav_serialport, cmd, timeout=4.0):
         print("[!] No response received")
 
     return output
+
 
 def wait_for_nsh_prompt(mav_serialport, timeout=3.0):
     mav_serialport.buf = ""
@@ -732,14 +716,16 @@ if __name__ == "__main__":
     expected_params = set_final_configs(mav_serialport, serial_number)
     time.sleep(0.5)
 
+    ver_all_output = run_shell_command(mav_serialport, "ver all", timeout=12.0)
+    print_ver_all_summary(ver_all_output)
+
+
     erase_logs(mav_serialport)
     time.sleep(1.0)
 
     reboot(mav_serialport)
     time.sleep(3.0)
 
-    ver_all_output = run_ver_all_command(mav_serialport)
-    print_ver_all_summary(ver_all_output)
 
     filename = save_params_via_mavlink(
         mav_serialport.mav,
