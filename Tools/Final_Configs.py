@@ -534,7 +534,7 @@ def erase_logs(mav_serialport):
         if match:
             folder = f"/fs/microsd/log/{match.group(1)}"
             print(f"[Deleting] {folder}")
-            print(nsh_cmd(mav_serialport, f'rm -rf "{folder}"'))
+            print(run_shell_command(mav_serialport, f'rm -rf "{folder}"'))
 
     # Remove common log artifacts at microsd root
     print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/logdata.txt"))
@@ -684,6 +684,9 @@ if __name__ == "__main__":
     serial_number = prompt_serial_number()
     expected_params = set_final_configs(mav_serialport, serial_number)
     time.sleep(0.5)
+
+    erase_logs(mav_serialport)
+    time.sleep(1.0)
 
     reboot(mav_serialport)
     time.sleep(3.0)
