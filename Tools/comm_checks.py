@@ -129,8 +129,8 @@ def enable_mavlink():
         commands = [
             "mavlink start -d /dev/ttyS6 -b 57600 -m 0 -f 1 -r 0\n",  # RS232-1
             "mavlink start -d /dev/ttyS5 -b 57600 -m 0 -f 1 -r 0\n",   # RS232-2
-            "param set MAV_0_CFG 101",
-            "param set MAV_1_CFG 102",
+            "param set MAV_0_CONFIG 101",
+            "param set MAV_1_CONFIG 102",
             "reboot"
         ]
 
