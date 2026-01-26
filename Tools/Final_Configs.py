@@ -526,31 +526,44 @@ def run_shell_command(mav_serialport, cmd, timeout=4.0):
 
     return output
 
+def _parse_nsh_ls(output):
+    entries = []
+    for line in output.splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("nsh>"):
+            continue
+        if cleaned.endswith(":"):
+            continue
+        if cleaned.startswith("/"):
+            continue
+        entries.append(cleaned.rstrip("/"))
+    return entries
+
+
 def erase_logs(mav_serialport):
     print("\n[Action] Erasing logs (QGC-compatible)...")
 
     # Stop logger just in case
-    print(nsh_cmd(mav_serialport, "logger stop"))
+    print(nsh_cmd(mav_serialport, "logger stop", timeout=5.0))
 
     # List folders
-    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log"))
+    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log", timeout=5.0))
 
-    # Delete each dated directory explicitly
-    out = nsh_cmd(mav_serialport, "ls /fs/microsd/log")
-    for line in out.splitlines():
-        match = re.match(r"^\s*(\d{4}-\d{2}-\d{2})/?\s*$", line)
-        if match:
-            folder = f"/fs/microsd/log/{match.group(1)}"
-            print(f"[Deleting] {folder}")
-            print(run_shell_command(mav_serialport, f'rm -rf "{folder}"', timeout=8.0))
+    # Delete each entry in the log directory explicitly
+    out = nsh_cmd(mav_serialport, "ls /fs/microsd/log", timeout=5.0)
+    for entry in _parse_nsh_ls(out):
+        folder = f"/fs/microsd/log/{entry}"
+        print(f"[Deleting] {folder}")
+        print(nsh_cmd(mav_serialport, f'rm -rf "{folder}"', timeout=8.0))
 
     # Remove common log artifacts at microsd root
-    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/logdata.txt"))
-    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/fault_*.log"))
+    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/logdata.txt", timeout=5.0))
+    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/fault_*.log", timeout=5.0))
+    print(nsh_cmd(mav_serialport, "sync", timeout=5.0))
 
     # Verify
     print("[Verify]")
-    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log"))
+    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log", timeout=5.0))
 
 
 def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
