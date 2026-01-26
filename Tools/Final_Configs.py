@@ -158,8 +158,8 @@ def run_ver_all_command(mav_serialport, timeout=3.0):
     print("Sending 'ver all' command...")
 
     # Wake up the shell
-    mav_serialport.write('\n')
-    time.sleep(0.3)
+    if not wait_for_nsh_prompt(mav_serialport, timeout=timeout):
+        print("[!] NSH prompt not detected before ver all.")
 
     # Send the command
     mav_serialport.write('ver all\n')
@@ -390,8 +390,12 @@ def set_ethernet_params(mav_serialport, timeout=1.0):
 def reboot(mav_serialport):
     print("\n[Action] Rebooting via MAVLink...")
     run_shell_command(mav_serialport, "reboot", timeout=6)
-    print("[OK] Reboot wait complete.")
-    run_shell_command(mav_serialport, "param touch SER_TEL2_BAUD", timeout=1)
+    print("[Action] Waiting for MAVLink heartbeat after reboot...")
+    if wait_for_heartbeat(mav_serialport.mav, timeout=20):
+        print("[OK] Reboot wait complete.")
+    else:
+        print("[!] No heartbeat received after reboot.")
+    run_shell_command(mav_serialport, "param touch SER_TEL2_BAUD", timeout=2)
     return True
 
 
@@ -525,6 +529,24 @@ def run_shell_command(mav_serialport, cmd, timeout=4.0):
         print("[!] No response received")
 
     return output
+
+def wait_for_nsh_prompt(mav_serialport, timeout=3.0):
+    mav_serialport.buf = ""
+    mav_serialport.write("\n")
+    start = time.time()
+    while time.time() - start < timeout:
+        mav_serialport._recv()
+        if "nsh>" in mav_serialport.buf:
+            return True
+        time.sleep(0.05)
+    return False
+
+def wait_for_heartbeat(mav, timeout=10):
+    try:
+        mav.wait_heartbeat(timeout=timeout)
+        return True
+    except Exception:
+        return False
 
 def _parse_nsh_ls(output):
     entries = []
@@ -670,6 +692,10 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
     """
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(output_dir, f"param_dump_{serial_number}_{timestamp}.txt")
+
+    if not wait_for_heartbeat(mav, timeout=10):
+        print("[!] No MAVLink heartbeat; cannot fetch parameters.")
+        return None
 
     params = _fetch_params_via_mavlink(mav)
 
