@@ -150,16 +150,6 @@ else:
 
 
 
-
-def run_ver_all_command(mav_serialport, timeout=10.0):
-    """
-    Run 'ver all' via the robust shell command helper.
-    """
-    output = run_shell_command(mav_serialport, "ver all", timeout=timeout)
-    return output
-
-
-
 def extract_ver_all_summary(ver_all_output):
     """
     Extract selected fields from ver all output.
@@ -514,16 +504,6 @@ def run_shell_command(mav_serialport, cmd, timeout=6.0, idle_after_prompt=0.25):
     return output
 
 
-def wait_for_nsh_prompt(mav_serialport, timeout=3.0):
-    mav_serialport.buf = ""
-    mav_serialport.write("\n")
-    start = time.time()
-    while time.time() - start < timeout:
-        mav_serialport._recv()
-        if "nsh>" in mav_serialport.buf:
-            return True
-        time.sleep(0.05)
-    return False
 
 def wait_for_heartbeat(mav, timeout=10):
     try:
@@ -546,30 +526,63 @@ def _parse_nsh_ls(output):
     return entries
 
 
-def erase_logs(mav_serialport):
-    print("\n[Action] Erasing logs (QGC-compatible)...")
+def erase_logs(mav_serialport, timeout=8.0):
+    """
+    QGC-style erase: send MAVLink LOG_ERASE (id 121), then optionally verify by requesting the log list.
+    """
+    mav = mav_serialport.mav
 
-    # Stop logger just in case
-    print(nsh_cmd(mav_serialport, "logger stop", timeout=5.0))
+    # Target sys/comp are learned from heartbeat by mavutil
+    target_system = getattr(mav, "target_system", 1)
+    target_component = getattr(mav, "target_component", 1)
 
-    # List folders
-    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log", timeout=5.0))
+    print("\n[Action] Erasing logs via MAVLink LOG_ERASE (AMC-style)...")
 
-    # Delete each entry in the log directory explicitly
-    out = nsh_cmd(mav_serialport, "ls /fs/microsd/log", timeout=5.0)
-    for entry in _parse_nsh_ls(out):
-        folder = f"/fs/microsd/log/{entry}"
-        print(f"[Deleting] {folder}")
-        print(nsh_cmd(mav_serialport, f'rm -rf "{folder}"', timeout=8.0))
+    # This is what QGC sends for "Erase All"
+    mav.mav.log_erase_send(target_system, target_component)
 
-    # Remove common log artifacts at microsd root
-    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/logdata.txt", timeout=5.0))
-    print(nsh_cmd(mav_serialport, "rm -f /fs/microsd/fault_*.log", timeout=5.0))
-    print(nsh_cmd(mav_serialport, "sync", timeout=5.0))
+    # Give the FC a moment to erase
+    t0 = time.time()
+    time.sleep(0.5)
 
-    # Verify
-    print("[Verify]")
-    print(nsh_cmd(mav_serialport, "ls /fs/microsd/log", timeout=5.0))
+    # Optional: verify by requesting list; many stacks will respond with LOG_ENTRY stream (possibly empty)
+    print("[Action] Verifying erase by requesting log list...")
+    mav.mav.log_request_list_send(target_system, target_component, 0, 0xFFFF)
+
+    last_seen = time.time()
+    any_entry = False
+    total_logs = None
+
+    while time.time() - t0 < timeout:
+        msg = mav.recv_match(type=["LOG_ENTRY"], blocking=True, timeout=1.0)
+        if msg is None:
+            # If we haven’t seen anything for a bit, stop waiting
+            if time.time() - last_seen > 2.0:
+                break
+            continue
+
+        last_seen = time.time()
+        any_entry = True
+        total_logs = msg.num_logs  # total number of logs onboard (as reported)
+        # If there are zero logs, we're done
+        if total_logs == 0:
+            print("[OK] Vehicle reports 0 logs.")
+            return True
+
+        # Otherwise, keep draining entries until quiet; some firmwares don’t stream all entries reliably over lossy links
+
+    if total_logs == 0:
+        print("[OK] Vehicle reports 0 logs.")
+        return True
+
+    if any_entry:
+        print(f"[!] Vehicle still reports {total_logs} logs (or erase status unclear over link).")
+    else:
+        print("[!] No LOG_ENTRY response to verification request (erase may still have worked).")
+
+    # Many setups still succeed even if we can’t verify over MAVLink due to link loss / no implementation
+    return False
+
 
 
 def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
