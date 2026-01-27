@@ -2,6 +2,7 @@
 import time
 import socket
 import subprocess  # kept in case you want later use
+import struct
 import serial
 import serial.tools.list_ports
 from pymavlink import mavutil
@@ -19,13 +20,22 @@ SHELL_DEBUG = 0
 
 # NMEA UDP injection (PAP*)
 UDP_NMEA_PORT = 19551
-PAPPOS = "PAPPOS,,37.335390,-122.026130,12.30,2.0,3.5"
+NMEA0183_LAT = 37.335390
+NMEA0183_LON = -122.026130
+PAPPOS = f"PAPPOS,,{NMEA0183_LAT:.6f},{NMEA0183_LON:.6f},12.30,2.0,3.5"
 PAPRPH = "PAPRPH,203600.00,0.80,1.50,273.20,0.20,0.20,0.50"
 
 # CAN / NMEA2000
 CAN_PGN = 127257
+AUX_POS_PGN = 130816
+AUX_ATT_PGN = 130817
+AUX_POS_LAT = 37.335490
+AUX_POS_LON = -122.026330
 PCAN_CHANNEL = PCAN_USBBUS1
 PCAN_BITRATE = PCAN_BAUD_250K
+N2K_PRIORITY = 3
+N2K_SOURCE_ADDRESS = 0x80
+N2K_INTERFRAME_DELAY_S = 0.01
 
 POST_REBOOT_WAIT_S = 10
 NMEA0183_OUTPUT_PORT = 19550
@@ -245,12 +255,22 @@ def enable_NM0183_NAV():
 
 
 # ============================================================
-#  NMEA UDP injection (PAPPOS / PAPRPH)
+        mavport = MavlinkSerialPort(
+            MAVLINK_SHELL,
+            MAVLINK_BAUD,
+            devnum=MAV_DEVNUM,
+            debug=SHELL_DEBUG,
+        )
 # ============================================================
 def nmea_checksum(sentence: str) -> str:
     csum = 0
-    for ch in sentence:
-        csum ^= ord(ch)
+        # NOTE: Listener output can be minimal; accept topic presence.
+        out = run_shell_command(mavport, "listener aux_global_position 1", timeout=timeout)
+        if "timestamp" in low or "lat" in low or "lon" in low or "aux_global_position" in low:
+        if out.strip():
+            print("[WARN] aux_global_position output did not include expected fields")
+            return True
+
     return f"{csum:02X}"
 
 
@@ -269,9 +289,93 @@ def send_nmea_udp(ip, port, sentences, inter_msg_delay_s=0.1):
 
 
 # ============================================================
+#  NMEA2000 fast-packet helpers (aux position/attitude)
+# ============================================================
+def build_n2k_can_id(pgn, source=N2K_SOURCE_ADDRESS, priority=N2K_PRIORITY):
+    return ((priority & 0x7) << 26) | ((pgn & 0x3FFFF) << 8) | (source & 0xFF)
+
+
+def build_fast_packet_frames(payload, sequence=0):
+    total_len = len(payload)
+    frames = []
+    frame_index = 0
+    offset = 0
+
+    first_chunk = payload[:6]
+    offset = 6
+    header = bytes([(sequence << 5) | frame_index, total_len])
+    frames.append((header + first_chunk).ljust(8, b"\xFF"))
+    frame_index += 1
+
+    while offset < total_len:
+        chunk = payload[offset:offset + 7]
+        offset += 7
+        header = bytes([(sequence << 5) | frame_index])
+        frames.append((header + chunk).ljust(8, b"\xFF"))
+        frame_index += 1
+
+    return frames
+
+
+def send_nmea2000_fast_packet(pcan, channel, pgn, payload, sequence=0):
+    can_id = build_n2k_can_id(pgn)
+    frames = build_fast_packet_frames(payload, sequence=sequence)
+    for frame in frames:
+        msg = TPCANMsg()
+        msg.ID = can_id
+        msg.MSGTYPE = PCAN_MESSAGE_EXTENDED
+        msg.LEN = 8
+        for i in range(8):
+            msg.DATA[i] = frame[i]
+        result = pcan.Write(channel, msg)
+        if result != PCAN_ERROR_OK:
+            return False
+        time.sleep(N2K_INTERFRAME_DELAY_S)
+    return True
+
+
+def send_nmea2000_aux_messages(channel=PCAN_CHANNEL):
+    print("\n=== Sending NMEA2000 Auxiliary Position/Attitude ===")
+    pcan = PCANBasic()
+    ret = pcan.Initialize(channel, PCAN_BITRATE)
+    if ret != PCAN_ERROR_OK:
+        print("[FAIL] PCAN initialization failed for NMEA2000 aux messages.")
+        return False
+
+    try:
+        lat = int(round(AUX_POS_LAT * 1e7))
+        lon = int(round(AUX_POS_LON * 1e7))
+        alt = 12
+        hacc = 2
+        vacc = 3
+        pos_payload = struct.pack("<iiiii", lat, lon, alt, hacc, vacc)
+
+        roll = 1
+        pitch = 2
+        heading = 273
+        roll_acc = 1
+        pitch_acc = 1
+        head_acc = 1
+        att_payload = struct.pack("<iiiiii", roll, pitch, heading, roll_acc, pitch_acc, head_acc)
+
+        if not send_nmea2000_fast_packet(pcan, channel, AUX_POS_PGN, pos_payload, sequence=0):
+            print("[FAIL] Failed to send AUX POS fast packet.")
+            return False
+
+        if not send_nmea2000_fast_packet(pcan, channel, AUX_ATT_PGN, att_payload, sequence=1):
+            print("[FAIL] Failed to send AUX ATT fast packet.")
+            return False
+
+        print("[OK] NMEA2000 AUX POS/ATT packets sent.")
+        return True
+    finally:
+        pcan.Uninitialize(channel)
+
+
+# ============================================================
 #  aux_global_position check (injected)
 # ============================================================
-def check_aux_global_position(timeout=6.0):
+def check_aux_global_position(timeout=6.0, expected_lat=None, expected_lon=None, tolerance=1e-6):
     """
     Connects to MAVLink shell and runs `listener aux_global_position`.
     PASS if it doesn't say "not found" and prints expected fields (timestamp/lat/lon).
@@ -284,13 +388,32 @@ def check_aux_global_position(timeout=6.0):
         return False
 
     try:
-        out = run_shell_command(mavport, "listener aux_global_position", timeout=timeout)
+        out = run_shell_command(mavport, "listener aux_global_position 1", timeout=timeout)
         low = out.lower()
         if "not found" in low or "unknown uorb topic" in low:
             print("[FAIL] aux_global_position topic not created")
             return False
 
-        if "timestamp" in low or "lat" in low or "lon" in low:
+        if "topic: aux_global_position" in low or "aux_global_position" in low:
+            lat_match = re.search(r"lat:\s*([-\d.]+)", low)
+            lon_match = re.search(r"lon:\s*([-\d.]+)", low)
+            if not lat_match or not lon_match:
+                print("[FAIL] aux_global_position published but missing lat/lon values")
+                return False
+
+            lat_val = float(lat_match.group(1))
+            lon_val = float(lon_match.group(1))
+
+            if expected_lat is not None and expected_lon is not None:
+                lat_ok = abs(lat_val - expected_lat) <= tolerance
+                lon_ok = abs(lon_val - expected_lon) <= tolerance
+                if not (lat_ok and lon_ok):
+                    print(
+                        "[FAIL] aux_global_position lat/lon did not match expected values "
+                        f"(lat {lat_val:.6f}, lon {lon_val:.6f})"
+                    )
+                    return False
+
             print("[OK] aux_global_position appears to be published")
             return True
 
@@ -364,8 +487,10 @@ def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=10.0):
 def main():
     results = {
         "nmea2000_pgn": False,
+        "nmea2000_aux_position": False,
         "udp_sent": False,
-        "aux_global_position": False,
+        "aux_global_position_nmea2000": False,
+        "aux_global_position_nmea0183": False,
         "nmea0183_output": False,
     }
 
@@ -393,25 +518,44 @@ def main():
     else:
         results["nmea2000_pgn"] = False
 
-    # 3) Send PAP messages over UDP (PAPPOS then PAPRPH)
+    # 3) Send NMEA2000 auxiliary position/attitude over CAN
+    if can_cfg_ok:
+        results["nmea2000_aux_position"] = send_nmea2000_aux_messages()
+        if results["nmea2000_aux_position"]:
+            time.sleep(0.5)
+            results["aux_global_position_nmea2000"] = check_aux_global_position(
+                timeout=6.0,
+                expected_lat=AUX_POS_LAT,
+                expected_lon=AUX_POS_LON,
+                tolerance=1e-5,
+            )
+
+    # 4) Send PAP messages over UDP (PAPPOS then PAPRPH)
     send_nmea_udp(ETH_IP, UDP_NMEA_PORT, [PAPPOS, PAPRPH], inter_msg_delay_s=0.1)
     results["udp_sent"] = True
 
     # Give driver time to parse/publish
     time.sleep(0.5)
 
-    # 4) Check aux_global_position topic created
-    results["aux_global_position"] = check_aux_global_position(timeout=6.0)
+    # 5) Check aux_global_position topic created from NMEA0183 input
+    results["aux_global_position_nmea0183"] = check_aux_global_position(
+        timeout=6.0,
+        expected_lat=NMEA0183_LAT,
+        expected_lon=NMEA0183_LON,
+        tolerance=1e-5,
+    )
 
-    # 5) Check NMEA0183 output on UDP port
+    # 6) Check NMEA0183 output on UDP port
     if nmea_cfg_ok:
         results["nmea0183_output"] = check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=30.0)
 
     # Summary
     print("\n==================== SUMMARY ====================")
     print(f"CAN NMEA2000 PGN {CAN_PGN}: {'[OK]' if results['nmea2000_pgn'] else '[FAIL]'}")
+    print(f"NMEA2000 AUX POS/ATT sent:  {'[OK]' if results['nmea2000_aux_position'] else '[FAIL]'}")
     print(f"UDP PAPPOS/PAPRPH sent:     {'[OK]' if results['udp_sent'] else '[FAIL]'}")
-    print(f"aux_global_position:        {'[OK]' if results['aux_global_position'] else '[FAIL]'}")
+    print(f"aux_global_position (N2K):  {'[OK]' if results['aux_global_position_nmea2000'] else '[FAIL]'}")
+    print(f"aux_global_position (0183): {'[OK]' if results['aux_global_position_nmea0183'] else '[FAIL]'}")
     print(f"NMEA0183 GGA/RMC output:     {'[OK]' if results['nmea0183_output'] else '[FAIL]'}")
     print("=================================================\n")
 
