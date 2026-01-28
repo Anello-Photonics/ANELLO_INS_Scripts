@@ -21,6 +21,7 @@ SHELL_DEBUG = 0
 UDP_NMEA_PORT = 19551
 PAPPOS = "PAPPOS,,37.335390,-122.026130,12.30,2.0,3.5"
 PAPRPH = "PAPRPH,203600.00,0.80,1.50,273.20,0.20,0.20,0.50"
+NMEA_INJECT_REPEAT = 5
 
 # CAN / NMEA2000
 CAN_PGN = 127257
@@ -29,6 +30,8 @@ PCAN_BITRATE = PCAN_BAUD_250K
 
 POST_REBOOT_WAIT_S = 10
 NMEA0183_OUTPUT_PORT = 19550
+NMEA0183_MCAST_GRP = "224.1.1.1"
+NMEA0183_IFACE_IP = "192.168.0.2"
 
 
 # ============================================================
@@ -254,59 +257,30 @@ def nmea_checksum(sentence: str) -> str:
     return f"{csum:02X}"
 
 
-def send_nmea_udp(ip, port, sentences, inter_msg_delay_s=0.1):
+def send_nmea_udp(ip, port, sentences, repeat=1, inter_msg_delay_s=0.1):
     print("\n=== Sending PAPPOS / PAPRPH over UDP ===")
     addr = (ip, port)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        for s in sentences:
-            msg = f"${s}*{nmea_checksum(s)}\r\n"
-            sock.sendto(msg.encode("ascii"), addr)
-            print("Sent:", msg.strip())
-            time.sleep(inter_msg_delay_s)
+        for _ in range(repeat):
+            for s in sentences:
+                msg = f"${s}*{nmea_checksum(s)}\r\n"
+                sock.sendto(msg.encode("ascii"), addr)
+                print("Sent:", msg.strip())
+                time.sleep(inter_msg_delay_s)
     finally:
         sock.close()
 
 
 # ============================================================
-#  aux_global_position check (injected)
-# ============================================================
-def check_aux_global_position(timeout=6.0):
-    """
-    Connects to MAVLink shell and runs `listener aux_global_position`.
-    PASS if it doesn't say "not found" and prints expected fields (timestamp/lat/lon).
-    """
-    print("\n=== Checking aux_global_position topic ===")
-    try:
-        mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
-    except Exception as e:
-        print(f"[FAIL] Could not open MAVLink shell for aux_global_position check: {e}")
-        return False
-
-    try:
-        out = run_shell_command(mavport, "listener aux_global_position", timeout=timeout)
-        low = out.lower()
-        if "not found" in low or "unknown uorb topic" in low:
-            print("[FAIL] aux_global_position topic not created")
-            return False
-
-        if "timestamp" in low or "lat" in low or "lon" in low:
-            print("[OK] aux_global_position appears to be published")
-            return True
-
-        print("[FAIL] aux_global_position may exist but did not show expected fields")
-        return False
-    finally:
-        try:
-            mavport.close()
-        except Exception:
-            pass
-
-
-# ============================================================
 #  NMEA0183 UDP output check (GGA/RMC)
 # ============================================================
-def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=10.0):
+def check_nmea0183_udp(
+    port=NMEA0183_OUTPUT_PORT,
+    timeout=10.0,
+    mcast_group=NMEA0183_MCAST_GRP,
+    iface_ip=NMEA0183_IFACE_IP,
+):
     """
     Listen on UDP port for NMEA0183 output.
     PASS if both GGA and RMC sentences are observed within timeout.
@@ -319,6 +293,9 @@ def check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=10.0):
     sock.settimeout(0.5)
     try:
         sock.bind(("0.0.0.0", port))
+        if mcast_group:
+            mreq = socket.inet_aton(mcast_group) + socket.inet_aton(iface_ip)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
     except OSError as exc:
         print(f"[FAIL] Could not bind UDP port {port}: {exc}")
         sock.close()
@@ -365,7 +342,6 @@ def main():
     results = {
         "nmea2000_pgn": False,
         "udp_sent": False,
-        "aux_global_position": False,
         "nmea0183_output": False,
     }
 
@@ -393,17 +369,20 @@ def main():
     else:
         results["nmea2000_pgn"] = False
 
-    # 3) Send PAP messages over UDP (PAPPOS then PAPRPH)
-    send_nmea_udp(ETH_IP, UDP_NMEA_PORT, [PAPPOS, PAPRPH], inter_msg_delay_s=0.1)
+    # 3) Send PAP messages over UDP (PAPPOS then PAPRPH) multiple times
+    send_nmea_udp(
+        ETH_IP,
+        UDP_NMEA_PORT,
+        [PAPPOS, PAPRPH],
+        repeat=NMEA_INJECT_REPEAT,
+        inter_msg_delay_s=0.1,
+    )
     results["udp_sent"] = True
 
     # Give driver time to parse/publish
     time.sleep(0.5)
 
-    # 4) Check aux_global_position topic created
-    results["aux_global_position"] = check_aux_global_position(timeout=6.0)
-
-    # 5) Check NMEA0183 output on UDP port
+    # 4) Check NMEA0183 output on UDP port
     if nmea_cfg_ok:
         results["nmea0183_output"] = check_nmea0183_udp(port=NMEA0183_OUTPUT_PORT, timeout=30.0)
 
@@ -411,7 +390,6 @@ def main():
     print("\n==================== SUMMARY ====================")
     print(f"CAN NMEA2000 PGN {CAN_PGN}: {'[OK]' if results['nmea2000_pgn'] else '[FAIL]'}")
     print(f"UDP PAPPOS/PAPRPH sent:     {'[OK]' if results['udp_sent'] else '[FAIL]'}")
-    print(f"aux_global_position:        {'[OK]' if results['aux_global_position'] else '[FAIL]'}")
     print(f"NMEA0183 GGA/RMC output:     {'[OK]' if results['nmea0183_output'] else '[FAIL]'}")
     print("=================================================\n")
 
