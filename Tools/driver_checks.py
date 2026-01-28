@@ -239,6 +239,10 @@ def enable_NM0183_NAV():
         run_shell_command(mavport, "param set NMEA_UDP_EN 1", timeout=6)
         run_shell_command(mavport, "param set NMEA_UDP_ODR_GGA 10", timeout=6)
         run_shell_command(mavport, "param set NMEA_UDP_ODR_RMC 10", timeout=6)
+        run_shell_command(mavport, "param set NMEA_UDP_MC_IP0 224", timeout=6)
+        run_shell_command(mavport, "param set NMEA_UDP_MC_IP1 1", timeout=6)
+        run_shell_command(mavport, "param set NMEA_UDP_MC_IP2 1", timeout=6)
+        run_shell_command(mavport, "param set NMEA_UDP_MC_IP3 1", timeout=6)
         return True
     finally:
         try:
@@ -375,7 +379,7 @@ def main():
         UDP_NMEA_PORT,
         [PAPPOS, PAPRPH],
         repeat=NMEA_INJECT_REPEAT,
-        inter_msg_delay_s=0.1,
+        inter_msg_delay_s=1,
     )
     results["udp_sent"] = True
 
