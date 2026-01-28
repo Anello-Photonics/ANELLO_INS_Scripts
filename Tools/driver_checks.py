@@ -25,6 +25,9 @@ NMEA_INJECT_REPEAT = 5
 
 # CAN / NMEA2000
 CAN_PGN = 127257
+WATER_SPEED_PGN = 128259
+WATER_SPEED_SOURCE_ADDRESS = 0x80
+WATER_SPEED_M_S = 1.5
 PCAN_CHANNEL = PCAN_USBBUS1
 PCAN_BITRATE = PCAN_BAUD_250K
 
@@ -203,6 +206,78 @@ def check_can_pgn(channel=PCAN_CHANNEL, timeout=5, retries=3):
 
 
 # ============================================================
+#  NMEA2000 Water Speed (PGN 128259) Injection
+# ============================================================
+def send_nmea2000_water_speed(
+    channel=PCAN_CHANNEL,
+    speed_m_s=WATER_SPEED_M_S,
+    source_address=WATER_SPEED_SOURCE_ADDRESS,
+):
+    print("\n=== Sending NMEA2000 Water Speed (PGN 128259) ===")
+    pcan = PCANBasic()
+    ret = pcan.Initialize(channel, PCAN_BITRATE)
+    if ret != PCAN_ERROR_OK:
+        print("[FAIL] PCAN initialization failed for water speed injection.")
+        return False
+
+    speed_raw = int(round(speed_m_s / 0.01))
+    speed_raw = max(min(speed_raw, 32767), -32768)
+    speed_bytes = speed_raw.to_bytes(2, byteorder="little", signed=True)
+
+    data = [
+        0x01,  # SID
+        speed_bytes[0],
+        speed_bytes[1],
+        0xFF,  # speed ground referenced (not available)
+        0xFF,
+        0x00,  # speed water referenced type
+        0x00,  # speed direction
+        0xFF,  # reserved
+    ]
+
+    can_id = (3 << 26) | (WATER_SPEED_PGN << 8) | (source_address & 0xFF)
+    msg = TPCANMsg()
+    msg.ID = can_id
+    msg.LEN = len(data)
+    msg.MSGTYPE = PCAN_MESSAGE_EXTENDED
+    msg.DATA = data
+
+    try:
+        ret = pcan.Write(channel, msg)
+        if ret != PCAN_ERROR_OK:
+            print("[FAIL] Failed to send NMEA2000 water speed message.")
+            return False
+        print(f"[OK] Sent PGN {WATER_SPEED_PGN} (0x{WATER_SPEED_PGN:X}) at {speed_m_s:.2f} m/s.")
+        return True
+    finally:
+        pcan.Uninitialize(channel)
+
+
+# ============================================================
+#  Listener check for sensor_water_speed_generic
+# ============================================================
+def check_water_speed_listener(timeout=6.0):
+    print("\n=== Checking listener: sensor_water_speed_generic ===")
+    try:
+        mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
+    except Exception as e:
+        print(f"[FAIL] Could not open MAVLink shell for listener check: {e}")
+        return False
+
+    try:
+        output = run_shell_command(mavport, "listener sensor_water_speed_generic -n 1", timeout=timeout)
+        if output and "timestamp" in output:
+            print("[OK] listener sensor_water_speed_generic populated.")
+            return True
+        print("[FAIL] listener sensor_water_speed_generic not populated.")
+        return False
+    finally:
+        try:
+            mavport.close()
+        except Exception:
+            pass
+
+# ============================================================
 #  Enable CAN PGN output
 # ============================================================
 def enable_CAN():
@@ -345,6 +420,7 @@ def check_nmea0183_udp(
 def main():
     results = {
         "nmea2000_pgn": False,
+        "water_speed_listener": False,
         "udp_sent": False,
         "nmea0183_output": False,
     }
@@ -373,6 +449,12 @@ def main():
     else:
         results["nmea2000_pgn"] = False
 
+    # 2b) Send NMEA2000 water speed and verify listener output
+    water_speed_sent = send_nmea2000_water_speed() if can_cfg_ok else False
+    if water_speed_sent:
+        time.sleep(0.5)
+        results["water_speed_listener"] = check_water_speed_listener()
+
     # 3) Send PAP messages over UDP (PAPPOS then PAPRPH) multiple times
     send_nmea_udp(
         ETH_IP,
@@ -393,6 +475,10 @@ def main():
     # Summary
     print("\n==================== SUMMARY ====================")
     print(f"CAN NMEA2000 PGN {CAN_PGN}: {'[OK]' if results['nmea2000_pgn'] else '[FAIL]'}")
+    print(
+        "listener sensor_water_speed_generic: "
+        f"{'[OK]' if results['water_speed_listener'] else '[FAIL]'}"
+    )
     print(f"UDP PAPPOS/PAPRPH sent:     {'[OK]' if results['udp_sent'] else '[FAIL]'}")
     print(f"NMEA0183 GGA/RMC output:     {'[OK]' if results['nmea0183_output'] else '[FAIL]'}")
     print("=================================================\n")
