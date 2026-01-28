@@ -2,6 +2,7 @@
 import time
 import socket
 import subprocess  # kept in case you want later use
+from ctypes import c_ubyte
 import serial
 import serial.tools.list_ports
 from pymavlink import mavutil
@@ -240,7 +241,7 @@ def send_nmea2000_water_speed(
     msg.ID = can_id
     msg.LEN = len(data)
     msg.MSGTYPE = PCAN_MESSAGE_EXTENDED
-    msg.DATA = data
+    msg.DATA = (c_ubyte * 8)(*data)
 
     try:
         ret = pcan.Write(channel, msg)
