@@ -266,8 +266,8 @@ def check_water_speed_listener(timeout=6.0):
         return False
 
     try:
-        output = run_shell_command(mavport, "listener sensor_water_speed_generic -n 1", timeout=timeout)
-        if output and "timestamp" in output:
+        output = run_shell_command(mavport, "listener sensor_water_speed_generic", timeout=timeout)
+        if output and "water_speed_x: 1.50000" in output:
             print("[OK] listener sensor_water_speed_generic populated.")
             return True
         print("[FAIL] listener sensor_water_speed_generic not populated.")
@@ -453,7 +453,7 @@ def main():
     # 2b) Send NMEA2000 water speed and verify listener output
     water_speed_sent = send_nmea2000_water_speed() if can_cfg_ok else False
     if water_speed_sent:
-        time.sleep(0.5)
+        time.sleep(1.5)
         results["water_speed_listener"] = check_water_speed_listener()
 
     # 3) Send PAP messages over UDP (PAPPOS then PAPRPH) multiple times
