@@ -124,12 +124,15 @@ class MavlinkSerialPort:
 # ============================================================
 #  Shell command runner (marker-based, more reliable)
 # ============================================================
-def run_shell_command(mavport, cmd, timeout=4.0):
+def run_shell_command(mavport, cmd, timeout=4.0, use_marker=True):
     """
     Send PX4 shell command and return output. Uses an end-marker for deterministic capture.
     """
-    marker = f"__END_{int(time.time() * 1000)}__"
-    full_cmd = f"{cmd}; echo {marker}"
+    marker = None
+    full_cmd = cmd
+    if use_marker:
+        marker = f"__END_{int(time.time() * 1000)}__"
+        full_cmd = f"{cmd}; echo {marker}"
 
     print(f"\nRunning command: {cmd}")
 
@@ -147,12 +150,12 @@ def run_shell_command(mavport, cmd, timeout=4.0):
         chunk = mavport.read_bytes(4096)
         if chunk:
             out += chunk
-            if marker.encode("utf-8") in out:
+            if marker and marker.encode("utf-8") in out:
                 break
         time.sleep(0.01)
 
     text = out.decode("utf-8", errors="replace")
-    if marker in text:
+    if marker and marker in text:
         text = text.split(marker, 1)[0]
     text = text.strip()
 
@@ -268,10 +271,16 @@ def check_water_speed_listener(timeout=6.0, expected_speed=WATER_SPEED_M_S, retr
 
     try:
         for attempt in range(1, retries + 1):
-            output = run_shell_command(mavport, "listener sensor_water_speed_generic", timeout=timeout)
+            output = run_shell_command(
+                mavport,
+                "listener sensor_water_speed_generic",
+                timeout=timeout,
+                use_marker=False,
+            )
             if not output:
                 print(f"[Attempt {attempt}] No output from listener.")
                 continue
+            print(f"[Attempt {attempt}] listener output:\n{output}")
 
             match = re.search(r"water_speed_x:\s*([^\s]+)", output)
             if not match:
