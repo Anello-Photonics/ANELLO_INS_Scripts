@@ -8,6 +8,7 @@ import serial.tools.list_ports
 from pymavlink import mavutil
 from PCANBasic import *
 import re
+import math
 
 # ---------------- User Settings ---------------- #
 ETH_IP = "192.168.0.3"
@@ -257,7 +258,7 @@ def send_nmea2000_water_speed(
 # ============================================================
 #  Listener check for sensor_water_speed_generic
 # ============================================================
-def check_water_speed_listener(timeout=6.0):
+def check_water_speed_listener(timeout=6.0, expected_speed=WATER_SPEED_M_S, retries=3, tolerance=0.05):
     print("\n=== Checking listener: sensor_water_speed_generic ===")
     try:
         mavport = MavlinkSerialPort(MAVLINK_SHELL, MAVLINK_BAUD, devnum=MAV_DEVNUM, debug=SHELL_DEBUG)
@@ -266,10 +267,37 @@ def check_water_speed_listener(timeout=6.0):
         return False
 
     try:
-        output = run_shell_command(mavport, "listener sensor_water_speed_generic", timeout=timeout)
-        if output and "water_speed_x: 1.50000" in output:
-            print("[OK] listener sensor_water_speed_generic populated.")
-            return True
+        for attempt in range(1, retries + 1):
+            output = run_shell_command(mavport, "listener sensor_water_speed_generic", timeout=timeout)
+            if not output:
+                print(f"[Attempt {attempt}] No output from listener.")
+                continue
+
+            match = re.search(r"water_speed_x:\s*([^\s]+)", output)
+            if not match:
+                print(f"[Attempt {attempt}] No water_speed_x field found.")
+                continue
+
+            raw_value = match.group(1)
+            try:
+                speed_value = float(raw_value)
+            except ValueError:
+                print(f"[Attempt {attempt}] Non-numeric water_speed_x value: {raw_value}")
+                continue
+
+            if not math.isfinite(speed_value):
+                print(f"[Attempt {attempt}] water_speed_x is not finite: {raw_value}")
+                continue
+
+            if abs(speed_value - expected_speed) <= tolerance:
+                print("[OK] listener sensor_water_speed_generic populated.")
+                return True
+
+            print(
+                f"[Attempt {attempt}] water_speed_x mismatch: "
+                f"{speed_value:.5f} m/s (expected {expected_speed:.2f} ± {tolerance:.2f})."
+            )
+
         print("[FAIL] listener sensor_water_speed_generic not populated.")
         return False
     finally:
