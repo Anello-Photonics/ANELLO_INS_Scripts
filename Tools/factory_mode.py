@@ -174,12 +174,15 @@ if __name__ == "__main__":
     # Define the commands
     factory_mode_off = [
         "param set IMU_MB_C_FACTORY 0",
-        "param set IMU_MB_C_FTOG 1"
+        "param set IMU_MB_C_FTOG 1",
+        "reboot"
     ]
 
     factory_mode_on = [
         "param set IMU_MB_C_FACTORY 1",
-        "param set IMU_MB_C_FTOG 0"
+        "param set IMU_MB_C_FTOG 0",
+        "param set IMU_MB_C_BAUD 921600",
+        "reboot"
     ]
 
     # Choose command list based on argument
