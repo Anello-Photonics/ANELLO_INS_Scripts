@@ -159,13 +159,13 @@ def factory_mode(toggle):
         factory_on = [
             "param set IMU_MB_C_FACTORY 1",
             "param set IMU_MB_C_FTOG 0",
+            "param set IMU_MB_C_BAUD 921600",
             "reboot"
         ]
 
         factory_off = [
             "param set IMU_MB_C_FACTORY 0",
             "param set IMU_MB_C_FTOG 1",
-            "param set IMU_MB_C_BAUD 921600",
             "reboot"
         ]
 
