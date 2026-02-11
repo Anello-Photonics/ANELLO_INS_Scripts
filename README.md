@@ -7,7 +7,7 @@ A collection of Python utilities for ANELLO INS devices. Each script below notes
 * **Usage:**
   1. Install dependencies: `pip install pymavlink pyserial`.
   2. Place the firmware JSON bundle in the working directory.
-  3. Run `python anello_fw_uploader.py --port <connection>` (for example `udp:0.0.0.0:14550` or a serial port) and follow the prompts documented at [ANELLO firmware upgrade guide](https://docs-a1.readthedocs.io/en/maritime_ins/fw_upgrade.html).
+  3. Run `python anello_fw_uploader.py --port <connection>` (for example "COM23" on Windows or "/dev/ttyUSB0" on Linux) and follow the prompts documented at [ANELLO firmware upgrade guide](https://docs-a1.readthedocs.io/en/maritime_ins/fw_upgrade.html).
 
 ## Maritime_INS_CFG.py
 * **Purpose:** Applies standard lever-arm offsets and Ethernet settings to a Maritime INS over MAVLink.
