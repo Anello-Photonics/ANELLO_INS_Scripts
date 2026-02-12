@@ -238,6 +238,13 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("NMUDP_MC_IP3", 0),
         ("MAV_2_BROADCAST", 1),
         ("MAV_2_CONFIG", 1000),
+        ("EKF2_WTSPD_SF0", 0.0),
+        ("EKF2_WTSPD_SF1", 1.0),
+        ("EKF2_WTSPD_SF2", 0.0),
+        ("EKF2_WTSPD_DBN", -1.0),
+        ("EKF2_ENG_CTRL", 0.0),
+        ("EKF2_ENG_STAT_L", 0.0),
+        ("EKF2_ENG_STAT_H", 0.0),
     ]
 
 
