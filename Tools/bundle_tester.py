@@ -334,9 +334,9 @@ def main() -> int:
     ap.add_argument("--pps-hz", type=float, default=1.0, help="Expected PPS frequency (Hz)")
     ap.add_argument("--pps-max-jitter-ms", type=float, default=5.0, help="Max interval stdev (ms)")
 
-    # Updated defaults to 10 seconds
-    ap.add_argument("--sync-low-s", type=float, default=10.0, help="Seconds to hold SYNC low")
-    ap.add_argument("--sync-high-s", type=float, default=10.0, help="Seconds to hold SYNC high")
+    # Updated defaults to 20 seconds
+    ap.add_argument("--sync-low-s", type=float, default=20.0, help="Seconds to hold SYNC low")
+    ap.add_argument("--sync-high-s", type=float, default=20.0, help="Seconds to hold SYNC high")
 
     ap.add_argument("--out-json", type=str, default="", help="Write results JSON to this path")
     ap.add_argument("--out-csv", type=str, default="", help="Write results CSV to this path")
