@@ -3,15 +3,15 @@
 Raspberry Pi GPIO bundle tester for 4-wire harness:
 
 Order (updated):
-  1) BIT/RESET test first (to confirm boot + reset behavior)
-  2) Force RESET released (HIGH/Hi-Z) so the unit stays ON afterward
-  3) PPS test (edge capture, validate ~1 Hz)
-  4) SYNC test (drive low/high; operator confirms via MAVLink shell I0)
+  0) Ensure RESET is released immediately at startup (so we don't hold device in reset)
+  1) PPS test (edge capture, validate ~1 Hz)
+  2) SYNC test (drive low/high; operator confirms via MAVLink shell I0)
+  3) BIT/RESET test (confirm boot + reset behavior)
 
 Notes:
 - RESET is assumed active-low (touching RESET to GND resets device).
-- We "hold reset high" safely by leaving the pin in INPUT mode with a pull-up
-  (Hi-Z + PUD_UP). This avoids ever driving a possibly-5V pull-up line.
+- We "release" RESET by leaving the pin in INPUT mode, optionally floating.
+  floating=True means Hi-Z with no pull (preferred if target has its own pull-up).
 - BCM numbering is used.
 
 Run with sudo:
@@ -50,13 +50,6 @@ def setup_gpio() -> None:
     GPIO.setmode(GPIO.BCM)
 
 
-def cleanup_gpio() -> None:
-    try:
-        GPIO.cleanup()
-    except Exception:
-        pass
-
-
 def wait_for_level(pin: int, level: int, timeout_s: float, poll_s: float = 0.01) -> bool:
     """Poll input pin until it equals level or timeout."""
     t0 = time.monotonic()
@@ -90,98 +83,17 @@ def reset_release(reset_pin: int, floating: bool = True) -> None:
 
 
 def reset_pulse_open_drain(reset_pin: int, assert_ms: int, release_floating: bool = True) -> None:
-    # Ensure released first
+    """Assert reset low briefly, then release (Hi-Z)."""
     reset_release(reset_pin, floating=release_floating)
     time.sleep(0.02)
 
-    # Assert low
     GPIO.setup(reset_pin, GPIO.OUT)
     GPIO.output(reset_pin, GPIO.LOW)
-    time.sleep(assert_ms / 1000.0)
-
-    # Release
-    reset_release(reset_pin, floating=release_floating)
-    time.sleep(0.02)
-
-
-def cleanup_except_reset(reset_pin: int, other_pins: list[int]) -> None:
-    """
-    Leave RESET released (INPUT + PULL_UP), but cleanup other pins.
-    This prevents RESET from floating low after GPIO.cleanup().
-    """
     try:
-        reset_release(reset_pin)  # INPUT + PULL_UP
-        GPIO.cleanup(other_pins)  # only cleanup PPS/BIT/SYNC
-    except Exception:
-        pass
-
-
-def test_bit_and_reset(
-    bit_pin: int,
-    reset_pin: int,
-    bit_rise_timeout_s: float,
-    assert_ms: int,
-    bit_drop_timeout_s: float,
-    bit_return_timeout_s: float,
-) -> TestResult:
-    """
-    Test sequence:
-      1) Wait for BIT to go HIGH after power-up.
-      2) Pulse RESET low briefly.
-      3) Verify BIT drops LOW shortly after reset.
-      4) Verify BIT returns HIGH within specified timeout.
-      5) Leave RESET released at the end so unit remains ON.
-    """
-    GPIO.setup(bit_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-    reset_release(reset_pin, floating=True)  # keep device out of reset by default
-
-    details = {}
-
-    # Step 1: wait for BIT high
-    got_high = wait_for_level(bit_pin, 1, bit_rise_timeout_s)
-    details["bit_high_within_s"] = bit_rise_timeout_s
-    details["bit_initial_high"] = bool(got_high)
-
-    if not got_high:
-        details["bit_level_after_timeout"] = read_level_stable(bit_pin)
-        details["reason"] = "BIT did not go high after power-up."
-        reset_release(reset_pin)
-        return TestResult("BIT_RESET", False, details)
-
-    # Step 2: assert reset
-    details["reset_assert_ms"] = assert_ms
-    details["reset_time_epoch_s"] = now_epoch_s()
-    reset_pulse_open_drain(reset_pin, assert_ms, release_floating=True)
-
-
-    # Step 3: verify BIT drops low
-    got_low = wait_for_level(bit_pin, 0, bit_drop_timeout_s)
-    details["bit_low_within_s_after_reset"] = bit_drop_timeout_s
-    details["bit_dropped_low"] = bool(got_low)
-
-    if not got_low:
-        details["bit_level_after_drop_timeout"] = read_level_stable(bit_pin)
-        details["reason"] = "BIT did not drop low after reset."
-        reset_release(reset_pin)
-        return TestResult("BIT_RESET", False, details)
-
-    # Step 4: verify BIT returns high
-    got_high_again = wait_for_level(bit_pin, 1, bit_return_timeout_s)
-    details["bit_high_again_within_s"] = bit_return_timeout_s
-    details["bit_returned_high"] = bool(got_high_again)
-
-    if not got_high_again:
-        details["bit_level_after_return_timeout"] = read_level_stable(bit_pin)
-        details["reason"] = "BIT did not return high after reset."
-        reset_release(reset_pin)
-        return TestResult("BIT_RESET", False, details)
-
-    # Step 5: ensure RESET stays released
-    reset_release(reset_pin, floating=True)
-
-    details["reset_left_released"] = True
-
-    return TestResult("BIT_RESET", True, details)
+        time.sleep(assert_ms / 1000.0)
+    finally:
+        reset_release(reset_pin, floating=release_floating)
+        time.sleep(0.02)
 
 
 def test_pps(
@@ -193,8 +105,8 @@ def test_pps(
 ) -> TestResult:
     """
     Detect PPS rising edges and compute interval stats.
-
-    Uses monotonic timestamps for interval measurement (more stable than epoch time).
+    Uses monotonic timestamps for interval measurement.
+    Includes simple glitch rejection by requiring >=0.80s between accepted edges.
     """
     GPIO.setup(pps_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
@@ -212,16 +124,12 @@ def test_pps(
 
     GPIO.add_event_detect(pps_pin, GPIO.RISING, callback=cb)
 
-
     t0 = time.monotonic()
     sleep_s(window_s)
     GPIO.remove_event_detect(pps_pin)
 
     n = len(edge_times)
-    details = {
-        "edges_captured": n,
-        "window_s": window_s,
-    }
+    details = {"edges_captured": n, "window_s": window_s}
 
     if n < 2:
         details["reason"] = "Not enough edges to measure intervals."
@@ -264,16 +172,10 @@ def test_pps(
 
 
 def test_sync(sync_pin: int, low_s: float, high_s: float) -> TestResult:
-    """
-    Drive SYNC low then high. Operator verifies in MAVLink shell by reading I0.
-    """
+    """Drive SYNC low then high. Operator verifies in MAVLink shell by reading I0."""
     GPIO.setup(sync_pin, GPIO.OUT, initial=GPIO.HIGH)
 
-    details = {
-        "sync_low_s": low_s,
-        "sync_high_s": high_s,
-        "operator_confirmed": None,
-    }
+    details = {"sync_low_s": low_s, "sync_high_s": high_s, "operator_confirmed": None}
 
     print("\nSYNC TEST")
     print("  This will drive SYNC LOW, then HIGH.")
@@ -300,6 +202,66 @@ def test_sync(sync_pin: int, low_s: float, high_s: float) -> TestResult:
     return TestResult("SYNC", passed, details)
 
 
+def test_bit_and_reset(
+    bit_pin: int,
+    reset_pin: int,
+    bit_rise_timeout_s: float,
+    assert_ms: int,
+    bit_drop_timeout_s: float,
+    bit_return_timeout_s: float,
+) -> TestResult:
+    """
+    Test sequence:
+      1) Wait for BIT to go HIGH after power-up.
+      2) Pulse RESET low briefly.
+      3) Verify BIT drops LOW shortly after reset.
+      4) Verify BIT returns HIGH within specified timeout.
+      5) Leave RESET released at the end.
+    """
+    GPIO.setup(bit_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    reset_release(reset_pin, floating=True)  # keep device out of reset by default
+
+    details = {}
+
+    got_high = wait_for_level(bit_pin, 1, bit_rise_timeout_s)
+    details["bit_high_within_s"] = bit_rise_timeout_s
+    details["bit_initial_high"] = bool(got_high)
+
+    if not got_high:
+        details["bit_level_after_timeout"] = read_level_stable(bit_pin)
+        details["reason"] = "BIT did not go high after power-up."
+        reset_release(reset_pin, floating=True)
+        return TestResult("BIT_RESET", False, details)
+
+    details["reset_assert_ms"] = assert_ms
+    details["reset_time_epoch_s"] = now_epoch_s()
+    reset_pulse_open_drain(reset_pin, assert_ms, release_floating=True)
+
+    got_low = wait_for_level(bit_pin, 0, bit_drop_timeout_s)
+    details["bit_low_within_s_after_reset"] = bit_drop_timeout_s
+    details["bit_dropped_low"] = bool(got_low)
+
+    if not got_low:
+        details["bit_level_after_drop_timeout"] = read_level_stable(bit_pin)
+        details["reason"] = "BIT did not drop low after reset."
+        reset_release(reset_pin, floating=True)
+        return TestResult("BIT_RESET", False, details)
+
+    got_high_again = wait_for_level(bit_pin, 1, bit_return_timeout_s)
+    details["bit_high_again_within_s"] = bit_return_timeout_s
+    details["bit_returned_high"] = bool(got_high_again)
+
+    if not got_high_again:
+        details["bit_level_after_return_timeout"] = read_level_stable(bit_pin)
+        details["reason"] = "BIT did not return high after reset."
+        reset_release(reset_pin, floating=True)
+        return TestResult("BIT_RESET", False, details)
+
+    reset_release(reset_pin, floating=True)
+    details["reset_left_released"] = True
+    return TestResult("BIT_RESET", True, details)
+
+
 def write_results(results, out_json: Path | None, out_csv: Path | None) -> None:
     payload = {
         "timestamp_epoch_s": now_epoch_s(),
@@ -324,19 +286,18 @@ def main() -> int:
     ap.add_argument("--reset", type=int, default=22, help="BCM pin for RESET output (active-low)")
     ap.add_argument("--sync", type=int, default=23, help="BCM pin for SYNC output")
 
-    ap.add_argument("--bit-rise-timeout", type=float, default=15.0, help="Seconds to wait for BIT high after power-up")
-    ap.add_argument("--reset-assert-ms", type=int, default=50, help="RESET assert duration in ms (active-low)")
-    ap.add_argument("--bit-drop-timeout", type=float, default=3.0, help="Seconds to wait for BIT low after reset")
-    ap.add_argument("--bit-return-timeout", type=float, default=15.0, help="Seconds to wait for BIT high after reset")
-
     ap.add_argument("--pps-window", type=float, default=30.0, help="Seconds to observe PPS edges")
     ap.add_argument("--pps-min-pulses", type=int, default=10, help="Minimum PPS edges required to pass")
     ap.add_argument("--pps-hz", type=float, default=1.0, help="Expected PPS frequency (Hz)")
     ap.add_argument("--pps-max-jitter-ms", type=float, default=5.0, help="Max interval stdev (ms)")
 
-    # Updated defaults to 20 seconds
     ap.add_argument("--sync-low-s", type=float, default=20.0, help="Seconds to hold SYNC low")
     ap.add_argument("--sync-high-s", type=float, default=20.0, help="Seconds to hold SYNC high")
+
+    ap.add_argument("--bit-rise-timeout", type=float, default=15.0, help="Seconds to wait for BIT high after power-up")
+    ap.add_argument("--reset-assert-ms", type=int, default=50, help="RESET assert duration in ms (active-low)")
+    ap.add_argument("--bit-drop-timeout", type=float, default=3.0, help="Seconds to wait for BIT low after reset")
+    ap.add_argument("--bit-return-timeout", type=float, default=15.0, help="Seconds to wait for BIT high after reset")
 
     ap.add_argument("--out-json", type=str, default="", help="Write results JSON to this path")
     ap.add_argument("--out-csv", type=str, default="", help="Write results CSV to this path")
@@ -348,36 +309,19 @@ def main() -> int:
 
     setup_gpio()
 
+    # IMPORTANT: release reset immediately at startup
+    reset_release(args.reset, floating=True)
+
     results = []
     try:
         print("\n=== BUNDLE TESTER ===")
         print("Wiring assumptions:")
         print("  - Common ground between Pi and unit")
         print("  - GPIO is 3.3V logic")
-        print("Order: BIT/RESET -> (leave RESET released) -> PPS -> SYNC\n")
+        print("Order: PPS -> SYNC -> BIT/RESET\n")
+        print("RESET is released at startup (Hi-Z, floating).\n")
 
-        print("Step 0: Ensure the unit is powered ON.")
-        input("Press Enter to start BIT/RESET test (will pulse RESET)...")
-
-        # BIT/RESET FIRST
-        results.append(
-            test_bit_and_reset(
-                bit_pin=args.bit,
-                reset_pin=args.reset,
-                bit_rise_timeout_s=args.bit_rise_timeout,
-                assert_ms=args.reset_assert_ms,
-                bit_drop_timeout_s=args.bit_drop_timeout,
-                bit_return_timeout_s=args.bit_return_timeout,
-            )
-        )
-        print(f"BIT/RESET: {'PASS' if results[-1].passed else 'FAIL'}")
-        print(json.dumps(results[-1].details, indent=2))
-
-        # Ensure RESET is released and stays released
-        reset_release(args.reset)
-        print("\nRESET left released (Hi-Z + pull-up) so the unit should remain ON.\n")
-
-        print("Step 1: Ensure antennas have satellite time fix (for PPS).")
+        print("Step 0: Ensure antennas have satellite time fix (for PPS).")
         input("Press Enter when ready to start PPS capture...")
 
         results.append(
@@ -397,20 +341,36 @@ def main() -> int:
         print(f"SYNC: {'PASS' if results[-1].passed else 'FAIL'}")
         print(json.dumps(results[-1].details, indent=2))
 
+        print("\nStep 2: Ensure the unit is powered ON (bench supply current sensing optional).")
+        input("Press Enter to start BIT/RESET test (will pulse RESET)...")
+
+        results.append(
+            test_bit_and_reset(
+                bit_pin=args.bit,
+                reset_pin=args.reset,
+                bit_rise_timeout_s=args.bit_rise_timeout,
+                assert_ms=args.reset_assert_ms,
+                bit_drop_timeout_s=args.bit_drop_timeout,
+                bit_return_timeout_s=args.bit_return_timeout,
+            )
+        )
+        print(f"BIT/RESET: {'PASS' if results[-1].passed else 'FAIL'}")
+        print(json.dumps(results[-1].details, indent=2))
+
         overall = all(r.passed for r in results)
         print("\n=== OVERALL RESULT:", "PASS" if overall else "FAIL", "===\n")
 
         write_results(results, out_json=out_json, out_csv=out_csv)
-
         return 0 if overall else 2
 
     except KeyboardInterrupt:
         print("\nAborted by user.")
         return 130
     finally:
+        # Leave reset released after script ends; cleanup everything else.
         try:
-            reset_release(args.reset, floating=True)   # leave reset released
-            GPIO.cleanup([args.pps, args.bit, args.sync])  # cleanup everything except reset
+            reset_release(args.reset, floating=True)
+            GPIO.cleanup([args.pps, args.bit, args.sync])
         except Exception:
             pass
 
