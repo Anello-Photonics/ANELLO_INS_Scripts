@@ -112,30 +112,48 @@ def parse_gpio_i0(text: str) -> str:
     return m.group(1) if m else "N/A"
 
 
-def parse_satellites_used_instance1(listener_text: str) -> str:
+def _extract_instance_block(listener_text: str, instance: int) -> str:
+    """
+    Extract the block for 'Instance <instance>:' from `listener sensor_gps` output.
+    """
     t = listener_text.replace("\r", "")
-
-    # Extract Instance 1 block
     m = re.search(
-        r"Instance\s+1:\s*\n(.*?)(?=\n\s*Instance\s+\d+:|\n\s*nsh>|\Z)",
+        rf"Instance\s+{instance}:\s*\n(.*?)(?=\n\s*Instance\s+\d+:|\n\s*nsh>|\Z)",
         t,
         flags=re.S
     )
-    block = m.group(1) if m else ""
+    return m.group(1) if m else ""
 
-    # Find satellites_used line
-    m2 = re.search(r"^\s*satellites_used:\s*([0-9]+)\s*$", block, flags=re.M)
-    return m2.group(1) if m2 else "N/A"
+
+def _parse_field_from_block(block: str, field: str) -> str:
+    """
+    Parse a scalar field like:
+      fix_type: 3
+      satellites_used: 10
+    """
+    m = re.search(rf"^\s*{re.escape(field)}:\s*([-\w\.]+)\s*$", block, flags=re.M)
+    return m.group(1) if m else "N/A"
+
+
+def parse_gps_fields(listener_text: str, instance: int) -> dict:
+    """
+    Return satellites_used + fix_type for a given GPS instance.
+    """
+    block = _extract_instance_block(listener_text, instance)
+    return {
+        "satellites_used": _parse_field_from_block(block, "satellites_used"),
+        "fix_type": _parse_field_from_block(block, "fix_type"),
+    }
 
 
 def main():
     mav = MavlinkSerialPort("COM4", 57600, devnum=10)
 
     root = tk.Tk()
-    root.title("GPIO I0 + GPS sats (Instance 1)")
-    root.geometry("460x180")
+    root.title("GPIO I0 + GPS (Instances 0/1)")
+    root.geometry("520x230")
 
-    label = tk.Label(root, font=("Courier", 18), justify="left", anchor="w")
+    label = tk.Label(root, font=("Courier", 16), justify="left", anchor="w")
     label.pack(fill="both", expand=True, padx=12, pady=12)
 
     running = True
@@ -146,11 +164,17 @@ def main():
 
     last_gpio_t = 0.0
     last_gps_t = 0.0
+
     gpio_val = "N/A"
-    sats1 = "N/A"
+
+    gps0_sats = "N/A"
+    gps0_fix = "N/A"
+    gps1_sats = "N/A"
+    gps1_fix = "N/A"
 
     def loop():
-        nonlocal last_gpio_t, last_gps_t, gpio_val, sats1
+        nonlocal last_gpio_t, last_gps_t
+        nonlocal gpio_val, gps0_sats, gps0_fix, gps1_sats, gps1_fix
 
         while running:
             now = time.time()
@@ -162,21 +186,31 @@ def main():
 
             if now - last_gps_t >= gps_period:
                 gps_out = run_cmd_marked(mav, "listener sensor_gps", "__DONE_GPS__", max_timeout=8.0)
-                sats1 = parse_satellites_used_instance1(gps_out)
+
+                g0 = parse_gps_fields(gps_out, instance=0)
+                g1 = parse_gps_fields(gps_out, instance=1)
+
+                gps0_sats = g0["satellites_used"]
+                gps0_fix = g0["fix_type"]
+                gps1_sats = g1["satellites_used"]
+                gps1_fix = g1["fix_type"]
+
                 last_gps_t = now
 
-                # If you still ever see N/A, uncomment to inspect what was actually captured:
-                # if sats1 == "N/A":
-                #     print("---- GPS RAW (first 800 chars) ----")
-                #     print(gps_out[:800])
+                # Debug capture if needed:
+                # if gps0_fix == "N/A" or gps1_fix == "N/A":
+                #     print("---- GPS RAW (first 1200 chars) ----")
+                #     print(gps_out[:1200])
 
             text = (
-                f"GPIO I0:          {gpio_val}\n"
-                f"satellites_used:  {sats1}\n"
+                f"GPIO I0:              {gpio_val}\n"
+                f"GPS0 satellites_used:  {gps0_sats}\n"
+                f"GPS0 fix_type:         {gps0_fix}\n"
+                f"GPS1 satellites_used:  {gps1_sats}\n"
+                f"GPS1 fix_type:         {gps1_fix}\n"
                 f"Updated: {time.strftime('%H:%M:%S')}"
             )
             root.after(0, lambda t=text: label.config(text=t))
-
             time.sleep(0.05)
 
     th = threading.Thread(target=loop, daemon=True)
