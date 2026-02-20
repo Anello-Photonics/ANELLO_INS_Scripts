@@ -729,10 +729,92 @@ def save_params_via_mavlink(
 
         if anello_mb_status_output:
             f.write("\n==== anello_mb status Output ====\n")
-            f.write(f"{anello_mb_status_output}\n")
+            f.write(f"{format_anello_mb_status_by_axis(anello_mb_status_output)}\n")
 
     print(f"[OK] Saved {len(params)} parameters to {filename}")
     return filename
+
+
+def _extract_first_match(pattern, text, default="[Not found]"):
+    match = re.search(pattern, text, re.MULTILINE)
+    return match.group(1).strip() if match else default
+
+
+def _extract_block_stats(block_text):
+    stats = {
+        "bytes read": _extract_first_match(r"bytes read\s+(\d+)", block_text),
+        "Last valid packet counter": _extract_first_match(r"Last valid packet counter\s+(\d+)", block_text),
+        "Serial number": _extract_first_match(r"Serial number\s+(\d+)", block_text),
+        "FW ver": _extract_first_match(r"FW ver\s+([^\s]+)", block_text),
+        "Filter cutoffs": _extract_first_match(r"Filter cutoffs\s+([^\n\r]+)", block_text),
+        "MEMS Config": _extract_first_match(r"MEMS Config\s+([^\n\r]+)", block_text),
+        "ODR": _extract_first_match(r"ODR\s+(\d+)", block_text),
+        "Output message type": _extract_first_match(r"Output message type\s+(\d+)", block_text),
+        "parsing duration": _extract_first_match(r"anello_mb: parsing duration:\s*([^\n\r]+)", block_text),
+        "poll error": _extract_first_match(r"anello_mb: poll error:\s*([^\n\r]+)", block_text),
+        "checksum good": _extract_first_match(r"anello_mb: checksum good:\s*([^\n\r]+)", block_text),
+        "checksum bad": _extract_first_match(r"anello_mb: checksum bad:\s*([^\n\r]+)", block_text),
+    }
+    return stats
+
+
+def format_anello_mb_status_by_axis(raw_output):
+    if not raw_output:
+        return "[No anello_mb status output captured]"
+
+    cleaned = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", raw_output)
+    cleaned = cleaned.replace("\r", "\n")
+
+    loop_duration = _extract_first_match(r"anello_mb: loop duration:\s*([^\n\r]+)", cleaned, default=None)
+
+    port_matches = re.findall(
+        r"Using port '(/dev/ttyS[134])'(.*?)(?=Using port '/dev/ttyS[134]'|$)",
+        cleaned,
+        re.DOTALL,
+    )
+
+    best_block_per_port = {}
+    for port, block in port_matches:
+        score = sum(1 for token in ("bytes read", "Last valid packet counter", "Serial number", "checksum good") if token in block)
+        if port not in best_block_per_port or score > best_block_per_port[port][0]:
+            best_block_per_port[port] = (score, block)
+
+    axis_map = {
+        "X Axis": "/dev/ttyS3",
+        "Y Axis": "/dev/ttyS4",
+        "Z Axis": "/dev/ttyS1",
+    }
+
+    lines = []
+    if loop_duration:
+        lines.append(f"anello_mb: loop duration: {loop_duration}")
+        lines.append("")
+
+    for axis, port in axis_map.items():
+        lines.append(f"--- {axis} ({port}) ---")
+        block = best_block_per_port.get(port)
+        if not block:
+            lines.append("No data captured for this axis.")
+            lines.append("")
+            continue
+
+        stats = _extract_block_stats(block[1])
+        lines.append(f"Using port '{port}'")
+        lines.append(f"bytes read {stats['bytes read']}")
+        lines.append(f"Last valid packet counter {stats['Last valid packet counter']}")
+        lines.append(f"Serial number {stats['Serial number']}")
+        lines.append(f"FW ver {stats['FW ver']}")
+        lines.append(f"Filter cutoffs {stats['Filter cutoffs']}")
+        lines.append(f"MEMS Config {stats['MEMS Config']}")
+        lines.append(f"ODR {stats['ODR']}")
+        lines.append(f"Output message type {stats['Output message type']}")
+        lines.append(f"anello_mb: parsing duration: {stats['parsing duration']}")
+        lines.append(f"anello_mb: poll error: {stats['poll error']}")
+        lines.append(f"anello_mb: checksum good: {stats['checksum good']}")
+        lines.append(f"anello_mb: checksum bad: {stats['checksum bad']}")
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 
