@@ -689,7 +689,13 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
     return formatted_params
 
 
-def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=None):
+def save_params_via_mavlink(
+    mav,
+    serial_number,
+    output_dir=".",
+    ver_all_output=None,
+    anello_mb_status_output=None,
+):
     """
     Fetch all parameters via MAVLink PARAM_REQUEST_LIST and save to a timestamped text file.
 
@@ -721,6 +727,10 @@ def save_params_via_mavlink(mav, serial_number, output_dir=".", ver_all_output=N
             for field, value in extract_ver_all_summary(ver_all_output):
                 f.write(f"{field}: {value}\n")
 
+        if anello_mb_status_output:
+            f.write("\n==== anello_mb status Output ====\n")
+            f.write(f"{anello_mb_status_output}\n")
+
     print(f"[OK] Saved {len(params)} parameters to {filename}")
     return filename
 
@@ -750,11 +760,19 @@ if __name__ == "__main__":
     reboot(mav_serialport)
     time.sleep(3.0)
 
+    anello_mb_status_output = run_shell_command(
+        mav_serialport,
+        "anello_mb status",
+        timeout=12.0,
+        idle_after_prompt=0.5,
+    )
+
 
     filename = save_params_via_mavlink(
         mav_serialport.mav,
         serial_number,
-        ver_all_output=ver_all_output
+        ver_all_output=ver_all_output,
+        anello_mb_status_output=anello_mb_status_output,
     )
     if filename:
         verify_expected_params_from_file(expected_params, filename)
