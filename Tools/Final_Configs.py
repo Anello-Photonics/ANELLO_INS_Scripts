@@ -212,7 +212,7 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
         ("NM0183_CFG", 2),
         ("MAV_0_CONFIG", 101),
         ("SER_TEL1_BAUD", 57600),
-        ("SER_TEL2_BAUD", 57600),
+        ("SER_TEL2_BAUD", 921600),
         ("GPS_SEP_BASE_X", 0.0),
         ("GPS_SEP_BASE_Y", 0.0),
         ("GPS_SEP_BASE_Z", 0.0),
