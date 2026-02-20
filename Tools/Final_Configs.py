@@ -728,7 +728,7 @@ def save_params_via_mavlink(
                 f.write(f"{field}: {value}\n")
 
         if anello_mb_status_output:
-            f.write("\n==== anello_mb status Output ====\n")
+            f.write("\n==== SiPhOG (anello_mb) Status Output ====\n")
             f.write(f"{format_anello_mb_status_by_axis(anello_mb_status_output)}\n")
 
     print(f"[OK] Saved {len(params)} parameters to {filename}")
