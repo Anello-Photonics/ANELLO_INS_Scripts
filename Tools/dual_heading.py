@@ -211,9 +211,7 @@ def set_lever_arms(mav_serialport, timeout=2.5):
         "param set EKF2_IMU_POS_X 0.0 ",
         "param set EKF2_IMU_POS_Y 0.0",
         "param set EKF2_IMU_POS_Z 0.0",
-        "param set SENS_BOARD_ROT 0",
-        # 
-        "reboot"
+        "param set SENS_BOARD_ROT 0"
     ]
 
     for cmd in lever_arm_cmds_cart:
@@ -229,7 +227,7 @@ def set_lever_arms(mav_serialport, timeout=2.5):
 
 
 if __name__ == "__main__":
-    mav_serialport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
+    mav_serialport = MavlinkSerialPort("COM4", 57600, devnum=10)
     time.sleep(0.5)
 
     # set params, THEN wait until heading is good
