@@ -6,6 +6,7 @@ from __future__ import print_function
 import sys
 import time
 import re
+import argparse
 
 from sys import platform as _platform
 
@@ -226,8 +227,20 @@ def set_lever_arms(mav_serialport, timeout=2.5):
     print("\n[Done] All lever arms attempted to be set.")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Set dual heading parameters and wait for heading_good_for_control."
+    )
+    parser.add_argument(
+        "port",
+        help='MAVLink connection string, e.g. "COM4" or "udp:0.0.0.0:14550"',
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    mav_serialport = MavlinkSerialPort("COM4", 57600, devnum=10)
+    args = parse_args()
+    mav_serialport = MavlinkSerialPort(args.port, 57600, devnum=10)
     time.sleep(0.5)
 
     # set params, THEN wait until heading is good
