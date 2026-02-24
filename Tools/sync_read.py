@@ -4,6 +4,7 @@ from __future__ import print_function
 import time
 import threading
 import re
+import argparse
 import tkinter as tk
 from pymavlink import mavutil
 
@@ -146,8 +147,20 @@ def parse_gps_fields(listener_text: str, instance: int) -> dict:
     }
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Read GPIO and GPS status over MAVLink shell."
+    )
+    parser.add_argument(
+        "port",
+        help='MAVLink connection string, e.g. "COM4" or "udp:0.0.0.0:14550"',
+    )
+    return parser.parse_args()
+
+
 def main():
-    mav = MavlinkSerialPort("COM4", 57600, devnum=10)
+    args = parse_args()
+    mav = MavlinkSerialPort(args.port, 57600, devnum=10)
 
     root = tk.Tk()
     root.title("GPIO I0 + GPS (Instances 0/1)")
