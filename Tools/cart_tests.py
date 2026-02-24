@@ -175,7 +175,7 @@ def main():
 
     root = tk.Tk()
     root.title("GPIO + GPS + Dual Heading")
-    root.geometry("620x280")
+    root.geometry("820x280")
 
     label = tk.Label(root, font=("Courier", 16), justify="left", anchor="w")
     label.pack(fill="both", expand=True, padx=12, pady=12)
