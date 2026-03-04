@@ -17,6 +17,7 @@ ORDER:
   2) Leave RESET released (GPIO LOW)
   3) SYNC
   4) PPS
+  5) Dual-heading acknowledgement
 
 Run:
   sudo python3 bundle_tester.py --pps 17 --bit 27 --reset 22 --sync 23
@@ -287,6 +288,24 @@ def test_pps(
     return TestResult("PPS", passed, details)
 
 
+def test_dual_heading_ack() -> TestResult:
+    details = {"operator_confirmed": None}
+
+    print("\nDUAL HEADING ACKNOWLEDGEMENT")
+    print("  Watch cart_tests.py and confirm Dual Heading Status shows achieved.")
+
+    try:
+        ans = input("Did cart_tests.py show dual heading achieved? [y/N]: ").strip().lower()
+        details["operator_confirmed"] = ans in ("y", "yes")
+    except KeyboardInterrupt:
+        details["operator_confirmed"] = False
+
+    passed = bool(details["operator_confirmed"])
+    if not passed:
+        details["reason"] = "Operator did not confirm dual heading achieved on cart_tests.py UI."
+    return TestResult("DUAL_HEADING", passed, details)
+
+
 def write_results(results, out_json: Path | None, out_csv: Path | None) -> None:
     payload = {
         "timestamp_epoch_s": now_epoch_s(),
@@ -352,7 +371,7 @@ def main() -> int:
         print("  - Common ground between Pi and unit")
         print("  - GPIO is 3.3V logic")
         print("RESET: GPIO HIGH asserts, GPIO LOW releases.\n")
-        print("Order: BIT/RESET -> (leave RESET released) -> SYNC -> PPS\n")
+        print("Order: BIT/RESET -> (leave RESET released) -> SYNC -> PPS -> DUAL HEADING ACK\n")
 
         print("Step 0: Ensure the unit is powered ON and serial is active.")
         input("Press Enter to start BIT/RESET test (will pulse RESET)...")
@@ -393,6 +412,11 @@ def main() -> int:
             )
         )
         print(f"PPS: {'PASS' if results[-1].passed else 'FAIL'}")
+        print(json.dumps(results[-1].details, indent=2))
+
+        input("\nPress Enter to run dual heading acknowledgement...")
+        results.append(test_dual_heading_ack())
+        print(f"DUAL_HEADING: {'PASS' if results[-1].passed else 'FAIL'}")
         print(json.dumps(results[-1].details, indent=2))
 
         overall = all(r.passed for r in results)
