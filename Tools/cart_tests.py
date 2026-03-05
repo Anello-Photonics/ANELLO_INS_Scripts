@@ -206,6 +206,7 @@ def main():
 
         # Requirement: run param set commands before anything else.
         set_dual_heading_params(mav)
+        print("lever arms set...")
         status_line = "Params set. Monitoring..."
 
         while running:
