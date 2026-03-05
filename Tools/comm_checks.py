@@ -2,11 +2,13 @@
 import time
 import sys
 import subprocess
+import json
 import serial
 import serial.tools.list_ports
 from pymavlink import mavutil
 from PCANBasic import *
 import re
+from datetime import datetime
 
 # ---------------- User Settings ---------------- #
 ETH_IP = "192.168.0.3"
@@ -353,21 +355,44 @@ def print_dmesg_and_df():
     """
     print("\n================ SYSTEM DIAGNOSTICS ================\n")
 
+    diagnostics = {
+        "dmesg": "",
+        "df": ""
+    }
+
     try:
         mavport = MavlinkSerialPort("udp:0.0.0.0:14550", 57600, devnum=10)
     except Exception as e:
         print(f"[FAIL] Could not open MAVLink shell for diagnostics: {e}")
-        return
+        return diagnostics
 
     print("\n------------------- dmesg -------------------")
-    run_shell_command(mavport, "dmesg", timeout=6)
+    diagnostics["dmesg"] = run_shell_command(mavport, "dmesg", timeout=6)
 
     print("\n-------------------- df ---------------------")
-    run_shell_command(mavport, "df -h", timeout=3)
+    diagnostics["df"] = run_shell_command(mavport, "df -h", timeout=3)
 
     print("\n====================================================\n")
 
     mavport.close()
+    return diagnostics
+
+
+def save_results_json(serial_number, results, diagnostics):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"comm_checks_{serial_number}_{timestamp}.json"
+    payload = {
+        "serial_number": serial_number,
+        "run_timestamp": timestamp,
+        "results": results,
+        "diagnostics": diagnostics
+    }
+
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    print(f"[OK] Saved results JSON: {filename}")
+    return filename
 
 
 def print_ver_all():
@@ -442,7 +467,7 @@ def main():
 
     enable_mavlink()
     time.sleep(1.0)
-    print_dmesg_and_df()   # ← ADD THIS
+    diagnostics = print_dmesg_and_df()
     print_ver_all()
 
     # RS232
@@ -462,6 +487,8 @@ def main():
         print(f"  {com}: {'[OK]' if status else '[FAIL]'}")
     print(f"\nCAN PGN {CAN_PGN}: {'[OK]' if results['can'] else '[FAIL]'}")
     print("=================================================\n")
+
+    save_results_json(serial_number, results, diagnostics)
 
     # enable factory mode
     factory_mode(True)
