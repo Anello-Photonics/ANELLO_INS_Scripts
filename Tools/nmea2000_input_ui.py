@@ -64,24 +64,6 @@ def _speed_mps_to_1e2_u16(speed_mps: float) -> tuple[int, int]:
     return _u16_le(raw)
 
 
-def encode_127250(values: dict[str, str]) -> list[int]:
-    sid = int(values["sid"], 0) & 0xFF
-    hdg_lo, hdg_hi = _angle_deg_to_rad_1e4_u16(float(values["heading_deg"]))
-    dev_lo, dev_hi = _angle_deg_to_rad_1e4_s16(float(values["deviation_deg"]))
-    var_lo, var_hi = _angle_deg_to_rad_1e4_s16(float(values["variation_deg"]))
-    reference = int(values["reference"], 0) & 0x03
-    return [sid, hdg_lo, hdg_hi, dev_lo, dev_hi, var_lo, var_hi, reference]
-
-
-def encode_127251(values: dict[str, str]) -> list[int]:
-    sid = int(values["sid"], 0) & 0xFF
-    rot_rad_s = math.radians(float(values["rot_deg_s"]))
-    raw = int(round(rot_rad_s / 3.125e-8))
-    raw = max(-2147483648, min(raw, 2147483647))
-    b0, b1, b2, b3 = _u32_le(raw)
-    return [sid, b0, b1, b2, b3, 0xFF, 0xFF, 0xFF]
-
-
 def encode_128259(values: dict[str, str]) -> list[int]:
     sid = int(values["sid"], 0) & 0xFF
     spd_lo, spd_hi = _speed_mps_to_1e2_u16(float(values["water_speed_mps"]))
@@ -102,14 +84,6 @@ def encode_128267(values: dict[str, str]) -> list[int]:
     return [sid, d0, d1, d2, d3, o0, o1, range_raw]
 
 
-def encode_129025(values: dict[str, str]) -> list[int]:
-    lat_raw = int(round(float(values["latitude_deg"]) * 1e7))
-    lon_raw = int(round(float(values["longitude_deg"]) * 1e7))
-    a0, a1, a2, a3 = _u32_le(lat_raw)
-    b0, b1, b2, b3 = _u32_le(lon_raw)
-    return [a0, a1, a2, a3, b0, b1, b2, b3]
-
-
 def encode_129026(values: dict[str, str]) -> list[int]:
     sid = int(values["sid"], 0) & 0xFF
     reference = int(values["reference"], 0) & 0x03
@@ -126,28 +100,22 @@ def encode_130306(values: dict[str, str]) -> list[int]:
     return [sid, spd_lo, spd_hi, ang_lo, ang_hi, reference, 0xFF, 0xFF]
 
 
+def encode_raw_8(values: dict[str, str]) -> list[int]:
+    tokens = values["payload_hex"].replace(",", " ").split()
+    if len(tokens) > 8:
+        raise ValueError("payload_hex must contain at most 8 bytes")
+    payload = [int(token, 16) & 0xFF for token in tokens]
+    return payload + [0xFF] * (8 - len(payload))
+
+
+def encode_u8_control(values: dict[str, str]) -> list[int]:
+    control = int(values["control"], 0)
+    if control not in (0, 1):
+        raise ValueError("control must be 0 or 1")
+    return [control & 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+
+
 SECTION_2_2_PRESETS: list[MessagePreset] = [
-    MessagePreset(
-        "127250 - Vessel Heading",
-        127250,
-        "Heading input with optional deviation/variation.",
-        [
-            FieldSpec("sid", "SID", "1"),
-            FieldSpec("heading_deg", "Heading (deg)", "90.0"),
-            FieldSpec("deviation_deg", "Deviation (deg)", "0.0"),
-            FieldSpec("variation_deg", "Variation (deg)", "0.0"),
-            FieldSpec("reference", "Reference (0=True,1=Mag)", "0"),
-        ],
-    ),
-    MessagePreset(
-        "127251 - Rate of Turn",
-        127251,
-        "Rate of turn input in deg/s.",
-        [
-            FieldSpec("sid", "SID", "1"),
-            FieldSpec("rot_deg_s", "Rate of Turn (deg/s)", "0.25"),
-        ],
-    ),
     MessagePreset(
         "128259 - Speed (Water Referenced)",
         128259,
@@ -167,15 +135,6 @@ SECTION_2_2_PRESETS: list[MessagePreset] = [
             FieldSpec("depth_m", "Depth (m)", "12.30"),
             FieldSpec("offset_m", "Offset (m)", "0.00"),
             FieldSpec("max_range_m", "Max Range (m)", "100.0"),
-        ],
-    ),
-    MessagePreset(
-        "129025 - Position, Rapid Update",
-        129025,
-        "Latitude/longitude input.",
-        [
-            FieldSpec("latitude_deg", "Latitude (deg)", "37.7749"),
-            FieldSpec("longitude_deg", "Longitude (deg)", "-122.4194"),
         ],
     ),
     MessagePreset(
@@ -200,17 +159,84 @@ SECTION_2_2_PRESETS: list[MessagePreset] = [
             FieldSpec("reference", "Reference (0=True,2=Apparent)", "2"),
         ],
     ),
+    MessagePreset(
+        "127488 - Engine Parameters, Rapid Update",
+        127488,
+        "Raw 8-byte payload (hex bytes) for PGN 127488.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 FF FF FF FF")],
+    ),
+    MessagePreset(
+        "127489 - Engine Parameters, Dynamic",
+        127489,
+        "Raw 8-byte payload (hex bytes) for PGN 127489.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 FF FF FF FF")],
+    ),
+    MessagePreset(
+        "128275 - Distance Log",
+        128275,
+        "Raw 8-byte payload (hex bytes) for PGN 128275.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 FF FF FF FF")],
+    ),
+    MessagePreset(
+        "130311 - Environmental Parameters",
+        130311,
+        "Raw 8-byte payload (hex bytes) for PGN 130311.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 FF FF FF FF")],
+    ),
+    MessagePreset(
+        "130578 - Vessel Speed Components",
+        130578,
+        "Raw 8-byte payload (hex bytes) for PGN 130578.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 FF FF FF FF")],
+    ),
+    MessagePreset(
+        "127493 - Transmission Parameters, Dynamic",
+        127493,
+        "Raw 8-byte payload (hex bytes) for PGN 127493.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 FF FF FF FF")],
+    ),
+    MessagePreset(
+        "65281 - GPS Control",
+        65281,
+        "8-bit unsigned control value (0 or 1) for GPS Control.",
+        [FieldSpec("control", "Control (0 or 1)", "0")],
+    ),
+    MessagePreset(
+        "65282 - Speed Sensor AutoCal Control",
+        65282,
+        "8-bit unsigned control value (0 or 1) for Speed Sensor AutoCal Control.",
+        [FieldSpec("control", "Control (0 or 1)", "0")],
+    ),
+    MessagePreset(
+        "130816 - Proprietary",
+        130816,
+        "Raw 8-byte payload (hex bytes) for proprietary PGN 130816.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 00 00 00 00")],
+    ),
+    MessagePreset(
+        "130817 - Proprietary",
+        130817,
+        "Raw 8-byte payload (hex bytes) for proprietary PGN 130817.",
+        [FieldSpec("payload_hex", "Payload Bytes (hex)", "00 00 00 00 00 00 00 00")],
+    ),
 ]
 
 PRESETS = {preset.title: preset for preset in SECTION_2_2_PRESETS}
 ENCODERS = {
-    127250: encode_127250,
-    127251: encode_127251,
+    127488: encode_raw_8,
+    127489: encode_raw_8,
+    127493: encode_raw_8,
     128259: encode_128259,
     128267: encode_128267,
-    129025: encode_129025,
+    128275: encode_raw_8,
     129026: encode_129026,
     130306: encode_130306,
+    130311: encode_raw_8,
+    130578: encode_raw_8,
+    65281: encode_u8_control,
+    65282: encode_u8_control,
+    130816: encode_raw_8,
+    130817: encode_raw_8,
 }
 
 
