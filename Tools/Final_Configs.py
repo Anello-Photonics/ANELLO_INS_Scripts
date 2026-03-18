@@ -174,17 +174,7 @@ def print_ver_all_summary(ver_all_output):
         print(f"{field}: {value}")
 
 
-def prompt_serial_number():
-    while True:
-        serial_number = input("Enter full serial number: ").strip()
-        digits = re.sub(r"\D", "", serial_number)
-        if len(digits) < 7:
-            print("[!] Serial number must contain at least 7 digits.")
-            continue
-        return digits
-
-
-def set_final_configs(mav_serialport, serial_number, timeout=1.0):
+def set_final_configs(mav_serialport, timeout=1.0):
     """
     Sets all lever arm parameters via MAVLink shell commands
     and prints the responses.
@@ -194,15 +184,9 @@ def set_final_configs(mav_serialport, serial_number, timeout=1.0):
     """
     print("Setting Final Configurations for Maritime INS...")
 
-
-    serial_year = serial_number[:4]
-    serial_tail = serial_number[-4:]
-
     final_configs = [
         ("IMU_MB_C_FACTORY", 0),
         ("IMU_MB_C_FTOG", 1),
-        ("IMU_MB_C_SN", int(serial_tail)),
-        ("IMU_MB_C_YR", int(serial_year)),
         ("SYS_AUTOSTART", 60009),
         ("NM2K_CFG", 1),
         ("J1939_CFG", 0),
@@ -537,64 +521,6 @@ def _parse_nsh_ls(output):
     return entries
 
 
-def erase_logs(mav_serialport, timeout=8.0):
-    """
-    QGC-style erase: send MAVLink LOG_ERASE (id 121), then optionally verify by requesting the log list.
-    """
-    mav = mav_serialport.mav
-
-    # Target sys/comp are learned from heartbeat by mavutil
-    target_system = getattr(mav, "target_system", 1)
-    target_component = getattr(mav, "target_component", 1)
-
-    print("\n[Action] Erasing logs via MAVLink LOG_ERASE (AMC-style)...")
-
-    # This is what QGC sends for "Erase All"
-    mav.mav.log_erase_send(target_system, target_component)
-
-    # Give the FC a moment to erase
-    t0 = time.time()
-    time.sleep(0.5)
-
-    # Optional: verify by requesting list; many stacks will respond with LOG_ENTRY stream (possibly empty)
-    print("[Action] Verifying erase by requesting log list...")
-    mav.mav.log_request_list_send(target_system, target_component, 0, 0xFFFF)
-
-    last_seen = time.time()
-    any_entry = False
-    total_logs = None
-
-    while time.time() - t0 < timeout:
-        msg = mav.recv_match(type=["LOG_ENTRY"], blocking=True, timeout=1.0)
-        if msg is None:
-            # If we haven’t seen anything for a bit, stop waiting
-            if time.time() - last_seen > 2.0:
-                break
-            continue
-
-        last_seen = time.time()
-        any_entry = True
-        total_logs = msg.num_logs  # total number of logs onboard (as reported)
-        # If there are zero logs, we're done
-        if total_logs == 0:
-            print("[OK] Vehicle reports 0 logs.")
-            return True
-
-        # Otherwise, keep draining entries until quiet; some firmwares don’t stream all entries reliably over lossy links
-
-    if total_logs == 0:
-        print("[OK] Vehicle reports 0 logs.")
-        return True
-
-    if any_entry:
-        print(f"[!] Vehicle still reports {total_logs} logs (or erase status unclear over link).")
-    else:
-        print("[!] No LOG_ENTRY response to verification request (erase may still have worked).")
-
-    # Many setups still succeed even if we can’t verify over MAVLink due to link loss / no implementation
-    return False
-
-
 
 def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
     print("\n[Action] Requesting all parameters via MAVLink...")
@@ -689,9 +615,24 @@ def _fetch_params_via_mavlink(mav, timeout=20, max_retries=2):
     return formatted_params
 
 
+def _build_serial_number_from_params(params):
+    year = params.get("IMU_MB_C_YR")
+    serial = params.get("IMU_MB_C_SN")
+
+    if year is None or serial is None:
+        return None
+
+    try:
+        year_text = str(int(float(year)))
+        serial_text = f"{int(float(serial)):04d}"
+    except (TypeError, ValueError):
+        return None
+
+    return f"{year_text}{serial_text}"
+
+
 def save_params_via_mavlink(
     mav,
-    serial_number,
     output_dir=".",
     ver_all_output=None,
     anello_mb_status_output=None,
@@ -705,7 +646,6 @@ def save_params_via_mavlink(
     - UINT32 / UINT16
     """
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(output_dir, f"param_dump_{serial_number}_{timestamp}.txt")
 
     if not wait_for_heartbeat(mav, timeout=10):
         print("[!] No MAVLink heartbeat; cannot fetch parameters.")
@@ -716,6 +656,12 @@ def save_params_via_mavlink(
     if not params:
         print("[!] No parameters received")
         return None
+
+    serial_number = _build_serial_number_from_params(params)
+    if serial_number:
+        filename = os.path.join(output_dir, f"param_dump_{serial_number}_{timestamp}.txt")
+    else:
+        filename = os.path.join(output_dir, f"param_dump_{timestamp}.txt")
 
     # Write to file sorted by parameter name
     with open(filename, "w") as f:
@@ -828,16 +774,12 @@ if __name__ == "__main__":
 
     time.sleep(0.5)
 
-    serial_number = prompt_serial_number()
-    expected_params = set_final_configs(mav_serialport, serial_number)
+    expected_params = set_final_configs(mav_serialport)
     time.sleep(0.5)
 
     ver_all_output = run_shell_command(mav_serialport, "ver all", timeout=12.0)
     print_ver_all_summary(ver_all_output)
 
-
-    erase_logs(mav_serialport)
-    time.sleep(1.0)
 
     reboot(mav_serialport)
     time.sleep(3.0)
@@ -852,7 +794,6 @@ if __name__ == "__main__":
 
     filename = save_params_via_mavlink(
         mav_serialport.mav,
-        serial_number,
         ver_all_output=ver_all_output,
         anello_mb_status_output=anello_mb_status_output,
     )
