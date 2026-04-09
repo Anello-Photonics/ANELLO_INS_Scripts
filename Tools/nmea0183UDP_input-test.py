@@ -15,8 +15,8 @@ attitude = "PAPRPH,203600.00,0.80,1.50,273.20,0.20,0.20,0.50"
 autocal_en = "PAPAUTOCAL,1"
 autocal_dis = "PAPAUTOCAL,0"
 
-checksum = nmea_checksum(gps_pos)
-msg = f"${gps_pos}*{checksum}\r\n"
+checksum = nmea_checksum(gps_en)
+msg = f"${gps_en}*{checksum}\r\n"
 
 UDP_IP = "192.168.0.3"
 UDP_PORT = 19551
@@ -26,10 +26,10 @@ sock.sendto(msg.encode('ascii'), (UDP_IP, UDP_PORT))
 print("Sent:", msg)
 
 
-checksum = nmea_checksum(attitude)
-msg = f"${attitude}*{checksum}\r\n"
+#checksum = nmea_checksum(attitude)
+#msg = f"${attitude}*{checksum}\r\n"
 
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.sendto(msg.encode('ascii'), (UDP_IP, UDP_PORT))
-print("Sent:", msg)
+#sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+#sock.sendto(msg.encode('ascii'), (UDP_IP, UDP_PORT))
+#print("Sent:", msg)
