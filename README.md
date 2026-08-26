@@ -16,6 +16,15 @@ A collection of Python utilities for ANELLO INS devices. Each script below notes
   2. Ensure MAVLink access to the INS (default `udp:0.0.0.0:14550`).
   3. Run `python Tools/Maritime_INS_CFG.py` to push the configured parameters, then allow the unit to reboot if prompted.
 
+## Log_Downloading/download_maritime_ins_logs.py
+* **Purpose:** Lists and downloads the on-board logs of a Maritime INS over MAVLink, using the same log protocol as AMarinerControl (`LOG_REQUEST_LIST` → `LOG_ENTRY` → `LOG_REQUEST_DATA` → `LOG_DATA`).
+* **Usage:**
+  1. Install the dependency: `pip install pymavlink`.
+  2. Ensure MAVLink access to the INS (default `udp:0.0.0.0:14550`) and that no other program is bound to the port.
+  3. List the available logs with their sizes and UTC timestamps: `python Log_Downloading/download_maritime_ins_logs.py --connect udpin:0.0.0.0:14550 --list`.
+  4. Download a log by id, or the newest with `--latest 1`: `python Log_Downloading/download_maritime_ins_logs.py --connect udpin:0.0.0.0:14550 --id 3 --output <folder>`.
+* **Notes:** Run the script on a host that shares a LAN with the INS. Downloading over a lossy or high-latency link (for example an SSH tunnel or VPN) can stall the INS mid-download and halt its MAVLink output until the unit is power cycled. If a download stalls, use smaller request windows (for example `--request-packets 32`). Full logs can be ~2 GiB, so expect downloads to take a while.
+
 ## Tools/Listener_Topics.py
 * **Purpose:** Desktop UI for discovering PX4 listener topics and viewing live topic data streamed from the INS.
 * **Usage:**
