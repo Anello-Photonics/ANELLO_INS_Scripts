@@ -2,8 +2,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import subprocess
 import os
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 selected_files = []
+
 
 def run_decoder():
     if not selected_files:
@@ -16,8 +20,11 @@ def run_decoder():
             continue
 
         try:
-            if file_path.endswith(".ulg"):
-                subprocess.run(["python", "ulog2csv.py", file_path], check=True)
+            if file_path.lower().endswith(".ulg"):
+                subprocess.run(
+                    [sys.executable, os.path.join(SCRIPT_DIR, "ulog2csv.py"), file_path],
+                    check=True,
+                )
             else:
                 messagebox.showwarning("Unknown Extension", f"Unsupported file type:\n{file_path}")
                 continue
@@ -28,6 +35,29 @@ def run_decoder():
             messagebox.showerror("Script Not Found", f"Decoder script or tool not found for:\n{file_path}")
 
     messagebox.showinfo("Done", "Processing completed.")
+
+
+def export_params():
+    ulg_files = [path for path in selected_files if path.lower().endswith(".ulg")]
+    if not ulg_files:
+        messagebox.showwarning("No ULog Files", "Please select one or more ULog files first.")
+        return
+
+    failures = []
+    for file_path in ulg_files:
+        try:
+            subprocess.run(
+                [sys.executable, os.path.join(SCRIPT_DIR, "ulog2params.py"), file_path],
+                check=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            failures.append(file_path)
+
+    if failures:
+        messagebox.showerror("Error", "Failed to export parameters from:\n" + "\n".join(failures))
+    else:
+        messagebox.showinfo("Done", "Parameter export completed.")
+
 
 def open_files():
     global selected_files
@@ -52,5 +82,8 @@ file_list_box.pack(pady=5)
 
 decode_button = tk.Button(root, text="Decode Files", command=run_decoder)
 decode_button.pack(pady=10)
+
+export_params_button = tk.Button(root, text="Export Parameters", command=export_params)
+export_params_button.pack(pady=10)
 
 root.mainloop()
