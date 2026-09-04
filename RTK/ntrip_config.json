@@ -1,9 +1,50 @@
 {
+  "_description": {
+    "ntrip.caster": "NTRIP caster hostname or IP address.",
+    "ntrip.caster_port": "NTRIP caster TCP port. The common default is 2101.",
+    "ntrip.mountpoint": "NTRIP mountpoint name, without a leading slash unless your caster requires it.",
+    "ntrip.username": "NTRIP account username.",
+    "ntrip.password": "NTRIP account password. Leave blank to be prompted at run time.",
+    "output.type": "MAVLink output transport. Use serial for a COM/tty port or ethernet for MAVLink over UDP.",
+    "output.serial_port": "Serial MAVLink output port used when output.type is serial, for example COM3 or /dev/ttyUSB0. Leave blank to select from a prompt.",
+    "output.baud": "Serial baud rate used when output.type is serial.",
+    "output.ethernet_ip": "Remote INS or MAVLink device IP address used when output.type is ethernet.",
+    "output.ethernet_port": "Remote INS or MAVLink device UDP port used when output.type is ethernet.",
+    "output.ethernet_local_ip": "Local IP address to bind for MAVLink UDP receive. Use 0.0.0.0 for all interfaces.",
+    "output.ethernet_local_port": "Local UDP port to listen for MAVLink packets when output.type is ethernet. Use the port the INS sends to, or null for an ephemeral port.",
+    "mavlink.gga_interval": "Seconds between NMEA GGA position messages sent to the NTRIP caster.",
+    "mavlink.position_timeout": "Seconds to wait for GPS2_RAW latitude/longitude before falling back to another MAVLink position packet or manual entry.",
+    "mavlink.source_system": "MAVLink source system ID used by this script.",
+    "mavlink.source_component": "MAVLink source component ID used by this script.",
+    "mavlink.version": "MAVLink wire version for outgoing GPS_RTCM_DATA frames. Use 2 unless a receiver requires MAVLink 1.",
+    "mavlink.altitude": "MSL altitude in meters used in the generated GGA sentence.",
+    "mavlink.latitude": "Optional manual latitude override in decimal degrees. Leave null to query GPS2_RAW over MAVLink.",
+    "mavlink.longitude": "Optional manual longitude override in decimal degrees. Leave null to query GPS2_RAW over MAVLink."
+  },
   "ntrip": {
-    "caster": "13.56.117.10",
+    "caster": "",
     "caster_port": 2101,
-    "mountpoint": "AUTO_WGS84",
-    "username": "kevin",
-    "password": "anello2024"
+    "mountpoint": "",
+    "username": "",
+    "password": ""
+  },
+  "output": {
+    "type": "serial",
+    "serial_port": "COM4",
+    "baud": 57600,
+    "ethernet_ip": "192.168.0.3",
+    "ethernet_port": 14550,
+    "ethernet_local_ip": "0.0.0.0",
+    "ethernet_local_port": 14550
+  },
+  "mavlink": {
+    "gga_interval": 10.0,
+    "position_timeout": 15.0,
+    "source_system": 255,
+    "source_component": 190,
+    "version": 2,
+    "altitude": 0.0,
+    "latitude": null,
+    "longitude": null
   }
 }

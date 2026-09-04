@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream an NTRIP feed as MAVLink GPS_RTCM_DATA messages to serial."""
+"""Stream an NTRIP feed as MAVLink GPS_RTCM_DATA messages."""
 
 import argparse
 import base64
@@ -25,12 +25,24 @@ GPS_RTCM_DATA_FIELD_LEN = 180
 GPS_RTCM_DATA_PAYLOAD_LEN = 182
 MAX_FRAGMENTED_RTCM_LEN = GPS_RTCM_DATA_FIELD_LEN * 4
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("ntrip_config.json")
+DEFAULT_NTRIP_PORT = 2101
+DEFAULT_OUTPUT_TYPE = "serial"
+DEFAULT_BAUD = 921600
+DEFAULT_ETHERNET_PORT = 14550
+DEFAULT_ETHERNET_LOCAL_IP = "0.0.0.0"
+DEFAULT_GGA_INTERVAL = 10.0
+DEFAULT_POSITION_TIMEOUT = 15.0
+DEFAULT_SOURCE_SYSTEM = 255
+DEFAULT_SOURCE_COMPONENT = 190
+DEFAULT_MAVLINK_VERSION = 2
+DEFAULT_ALTITUDE = 0.0
 POSITION_MESSAGE_INTERVAL_US = 500000
-POSITION_MESSAGE_IDS = {
-    "GPS_RAW_INT": 24,
-    "GLOBAL_POSITION_INT": 33,
-    "GPS2_RAW": 124,
-}
+PREFERRED_POSITION_MESSAGE = "GPS2_RAW"
+POSITION_MESSAGE_IDS = (
+    ("GPS2_RAW", 124),
+    ("GPS_RAW_INT", 24),
+    ("GLOBAL_POSITION_INT", 33),
+)
 
 
 def prompt(label, default=None):
@@ -70,7 +82,7 @@ def choose_serial_port():
 
 
 def load_config(path):
-    """Load NTRIP settings from a JSON config file."""
+    """Load settings from a JSON config file."""
     try:
         with path.open("r", encoding="utf-8") as config_file:
             config = json.load(config_file)
@@ -84,10 +96,24 @@ def load_config(path):
     if not isinstance(config, dict):
         raise ValueError(f"{path} must contain a JSON object")
 
-    ntrip_config = config.get("ntrip", config)
-    if not isinstance(ntrip_config, dict):
-        raise ValueError(f"{path} field 'ntrip' must be a JSON object")
-    return ntrip_config
+    return config
+
+
+def config_section(config, section):
+    """Return a named JSON object section, or an empty dict when omitted."""
+    section_config = config.get(section, {})
+    if section_config in (None, ""):
+        return {}
+    if not isinstance(section_config, dict):
+        raise ValueError(f"config field '{section}' must be a JSON object")
+    return section_config
+
+
+def ntrip_config_section(config):
+    """Return NTRIP config, preserving compatibility with old flat configs."""
+    if "ntrip" in config:
+        return config_section(config, "ntrip")
+    return config
 
 
 def config_text(config, key, strip=True):
@@ -112,6 +138,37 @@ def config_int(config, key, default):
     except (TypeError, ValueError) as error:
         raise ValueError(f"config field '{key}' must be an integer") from error
     return value
+
+
+def config_optional_int(config, key):
+    """Return an optional integer config value."""
+    if key not in config or config.get(key) in (None, ""):
+        return None
+    return config_int(config, key, 0)
+
+
+def config_float(config, key, default):
+    """Return a float config value with a default for missing/blank values."""
+    value = config.get(key, default)
+    if value in (None, ""):
+        return default
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"config field '{key}' must be a number") from error
+    return value
+
+
+def config_optional_float(config, key):
+    """Return an optional float config value."""
+    if key not in config or config.get(key) in (None, ""):
+        return None
+    return config_float(config, key, 0.0)
+
+
+def validate_udp_port(label, value):
+    if not 0 < value <= 65535:
+        raise ValueError(f"{label} must be between 1 and 65535")
 
 
 def build_request(mountpoint, username, password):
@@ -289,15 +346,140 @@ class MavlinkRtcmPacker:
         return b"\xFD" + header + payload + checksum.to_bytes(2, "little")
 
 
-def send_rtcm_blob(serial_output, packer, data):
-    """Package one correction blob and write its MAVLink frames to serial."""
+def send_rtcm_blob(mavlink_output, packer, data):
+    """Package one correction blob and write its MAVLink frames."""
     frames = packer.pack_rtcm_blob(data)
     for frame in frames:
-        serial_output.write(frame)
+        mavlink_output.write(frame)
     print(
         f"RTCM {len(data)} bytes -> {len(frames)} GPS_RTCM_DATA MAVLink frame(s)",
         flush=True,
     )
+
+
+class SerialMavlinkEndpoint:
+    """File-like MAVLink endpoint backed by a serial port."""
+
+    def __init__(self, port, baud, timeout=1):
+        self.port = port
+        self._serial = serial.Serial(port, baudrate=baud, timeout=timeout)
+        self.description = f"serial {port} at {baud} baud"
+
+    @property
+    def timeout(self):
+        return self._serial.timeout
+
+    @timeout.setter
+    def timeout(self, value):
+        self._serial.timeout = value
+
+    @property
+    def in_waiting(self):
+        return self._serial.in_waiting
+
+    def read(self, size=1):
+        return self._serial.read(size)
+
+    def write(self, data):
+        return self._serial.write(data)
+
+    def flush(self):
+        return self._serial.flush()
+
+    def close(self):
+        self._serial.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+
+
+class UdpMavlinkEndpoint:
+    """File-like MAVLink endpoint backed by UDP."""
+
+    def __init__(self, remote_ip, remote_port, local_ip, local_port, timeout=1):
+        self.remote_address = (remote_ip, remote_port)
+        self._buffer = bytearray()
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            bind_port = 0 if local_port is None else local_port
+            self._socket.bind((local_ip, bind_port))
+            self.timeout = timeout
+        except OSError:
+            self._socket.close()
+            raise
+
+        local_address = self._socket.getsockname()
+        self.description = (
+            f"ethernet UDP {local_address[0]}:{local_address[1]} -> "
+            f"{remote_ip}:{remote_port}"
+        )
+
+    @property
+    def timeout(self):
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value):
+        self._timeout = value
+        self._socket.settimeout(value)
+
+    @property
+    def in_waiting(self):
+        return len(self._buffer)
+
+    def read(self, size=1):
+        if size is None or size <= 0:
+            size = 1
+        if not self._buffer:
+            try:
+                data, _address = self._socket.recvfrom(4096)
+            except socket.timeout:
+                return b""
+            self._buffer.extend(data)
+
+        data = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        return data
+
+    def write(self, data):
+        return self._socket.sendto(bytes(data), self.remote_address)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self._socket.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+
+
+def open_mavlink_endpoint(
+    output_type,
+    serial_port,
+    baud,
+    ethernet_ip,
+    ethernet_port,
+    ethernet_local_ip,
+    ethernet_local_port,
+):
+    if output_type == "serial":
+        return SerialMavlinkEndpoint(serial_port, baud, timeout=1)
+    if output_type == "ethernet":
+        return UdpMavlinkEndpoint(
+            ethernet_ip,
+            ethernet_port,
+            ethernet_local_ip,
+            ethernet_local_port,
+            timeout=1,
+        )
+    raise ValueError("output type must be 'serial' or 'ethernet'")
 
 
 def require_pymavlink():
@@ -315,7 +497,8 @@ def request_position_messages(mavlink_output, target_system, target_component):
     if command_id is None:
         return
 
-    for message_id in POSITION_MESSAGE_IDS.values():
+    print("Requesting MAVLink GPS2_RAW position stream...")
+    for _message_name, message_id in POSITION_MESSAGE_IDS:
         mavlink_output.command_long_send(
             target_system,
             target_component,
@@ -334,12 +517,12 @@ def request_position_messages(mavlink_output, target_system, target_component):
 def position_from_mavlink_message(message):
     """Extract decimal-degree latitude/longitude from a MAVLink position message."""
     message_type = message.get_type()
-    if message_type == "GLOBAL_POSITION_INT":
-        latitude = message.lat / 10000000.0
-        longitude = message.lon / 10000000.0
-    elif message_type in ("GPS_RAW_INT", "GPS2_RAW"):
+    if message_type in ("GPS2_RAW", "GPS_RAW_INT"):
         if getattr(message, "fix_type", 0) < 2:
             return None
+        latitude = message.lat / 10000000.0
+        longitude = message.lon / 10000000.0
+    elif message_type == "GLOBAL_POSITION_INT":
         latitude = message.lat / 10000000.0
         longitude = message.lon / 10000000.0
     else:
@@ -351,27 +534,29 @@ def position_from_mavlink_message(message):
 
 
 def read_mavlink_position(
-    serial_connection,
+    mavlink_connection,
     timeout,
     source_system,
     source_component,
 ):
-    """Listen on the serial MAVLink connection until a usable position arrives."""
+    """Listen on the MAVLink connection until a usable position arrives."""
     require_pymavlink()
 
     parser = mavlink2.MAVLink(None)
     parser.robust_parsing = True
     mavlink_output = mavlink2.MAVLink(
-        serial_connection,
+        mavlink_connection,
         srcSystem=source_system,
         srcComponent=source_component,
     )
-    old_timeout = serial_connection.timeout
+    old_timeout = mavlink_connection.timeout
     deadline = time.monotonic() + timeout
     requested_stream = False
     last_heartbeat = 0.0
+    fallback_position = None
+    fallback_message_type = None
 
-    print(f"Waiting up to {timeout:.1f}s for MAVLink latitude/longitude...")
+    print(f"Waiting up to {timeout:.1f}s for MAVLink GPS2_RAW latitude/longitude...")
     try:
         while time.monotonic() < deadline:
             now = time.monotonic()
@@ -385,15 +570,15 @@ def read_mavlink_position(
                 )
                 last_heartbeat = now
 
-            serial_connection.timeout = min(0.25, max(0.0, deadline - now))
-            data = serial_connection.read(serial_connection.in_waiting or 1)
+            mavlink_connection.timeout = min(0.25, max(0.0, deadline - now))
+            data = mavlink_connection.read(mavlink_connection.in_waiting or 1)
             if not data:
                 continue
 
             for byte in data:
                 try:
                     message = parser.parse_char(bytes([byte]))
-                except mavlink2.MAVError:
+                except Exception:
                     continue
                 if message is None or message.get_type() == "BAD_DATA":
                     continue
@@ -410,15 +595,28 @@ def read_mavlink_position(
                 position = position_from_mavlink_message(message)
                 if position is not None:
                     latitude, longitude = position
-                    print(
-                        f"Using MAVLink {message.get_type()} position: "
-                        f"{latitude:.7f}, {longitude:.7f}"
-                    )
-                    return latitude, longitude, mavlink_output.seq
+                    message_type = message.get_type()
+                    if message_type == PREFERRED_POSITION_MESSAGE:
+                        print(
+                            f"Using MAVLink GPS2_RAW position: "
+                            f"{latitude:.7f}, {longitude:.7f}"
+                        )
+                        return latitude, longitude, mavlink_output.seq
+                    if fallback_position is None:
+                        fallback_position = position
+                        fallback_message_type = message_type
     finally:
-        serial_connection.timeout = old_timeout
+        mavlink_connection.timeout = old_timeout
 
-    raise TimeoutError("timed out waiting for MAVLink latitude/longitude")
+    if fallback_position is not None:
+        latitude, longitude = fallback_position
+        print(
+            f"GPS2_RAW position not received; using MAVLink {fallback_message_type} "
+            f"position: {latitude:.7f}, {longitude:.7f}"
+        )
+        return latitude, longitude, mavlink_output.seq
+
+    raise TimeoutError("timed out waiting for MAVLink GPS2_RAW latitude/longitude")
 
 
 def stream(
@@ -427,8 +625,8 @@ def stream(
     mountpoint,
     username,
     password,
-    serial_output,
-    serial_port,
+    mavlink_output,
+    output_description,
     latitude,
     longitude,
     altitude,
@@ -438,7 +636,7 @@ def stream(
     mavlink_version,
     initial_sequence=0,
 ):
-    """Connect to both endpoints and copy NTRIP corrections as MAVLink frames."""
+    """Connect to the NTRIP caster and copy corrections as MAVLink frames."""
     request = build_request(mountpoint, username, password)
     packer = MavlinkRtcmPacker(
         source_system,
@@ -453,12 +651,12 @@ def stream(
         source.settimeout(min(gga_interval, 1.0))
         print(
             f"Streaming {caster}:{caster_port}/{mountpoint.lstrip('/')} "
-            f"to {serial_port} at {serial_output.baudrate} baud as MAVLink "
-            f"{mavlink_version} GPS_RTCM_DATA. Press Ctrl+C to stop."
+            f"to {output_description} as MAVLink {mavlink_version} "
+            "GPS_RTCM_DATA. Press Ctrl+C to stop."
         )
 
         if initial_data:
-            send_rtcm_blob(serial_output, packer, initial_data)
+            send_rtcm_blob(mavlink_output, packer, initial_data)
 
         source.sendall(build_gga(latitude, longitude, altitude))
         last_gga = time.monotonic()
@@ -467,7 +665,7 @@ def stream(
                 data = source.recv(MAX_FRAGMENTED_RTCM_LEN)
                 if not data:
                     raise ConnectionError("caster closed the correction stream")
-                send_rtcm_blob(serial_output, packer, data)
+                send_rtcm_blob(mavlink_output, packer, data)
             except socket.timeout:
                 pass
 
@@ -475,108 +673,200 @@ def stream(
                 source.sendall(build_gga(latitude, longitude, altitude))
                 last_gga = time.monotonic()
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help=f"JSON config file for NTRIP settings (default: {DEFAULT_CONFIG_PATH})",
+        help=f"JSON config file (default: {DEFAULT_CONFIG_PATH})",
     )
     parser.add_argument("--caster", help="NTRIP caster hostname or IP")
-    parser.add_argument("--caster-port", type=int, help="NTRIP caster port (default: 2101)")
+    parser.add_argument("--caster-port", type=int, help="NTRIP caster port")
     parser.add_argument("--mountpoint", help="NTRIP mountpoint")
     parser.add_argument("--username", help="NTRIP username")
     parser.add_argument("--password", help="NTRIP password; prompted when omitted")
+    parser.add_argument(
+        "--output-type",
+        choices=("serial", "ethernet"),
+        help="MAVLink output type: serial or ethernet",
+    )
     parser.add_argument("--serial-port", help="serial port receiving MAVLink frames")
-    parser.add_argument("--baud", type=int, default=921600)
+    parser.add_argument("--baud", type=int, help="serial baud rate")
+    parser.add_argument("--ethernet-ip", help="remote MAVLink device IP for ethernet output")
+    parser.add_argument("--ethernet-port", type=int, help="remote MAVLink UDP port")
+    parser.add_argument(
+        "--ethernet-local-ip",
+        help="local bind IP for MAVLink ethernet receive",
+    )
+    parser.add_argument(
+        "--ethernet-local-port",
+        type=int,
+        help="local UDP port for MAVLink ethernet receive",
+    )
     parser.add_argument("--latitude", type=float, help="rover latitude in decimal degrees")
     parser.add_argument("--longitude", type=float, help="rover longitude in decimal degrees")
-    parser.add_argument("--altitude", type=float, default=0.0, help="MSL altitude in metres")
-    parser.add_argument(
-        "--gga-interval",
-        type=float,
-        default=10.0,
-        help="seconds between GGA messages (default: 10)",
-    )
+    parser.add_argument("--altitude", type=float, help="MSL altitude in metres")
+    parser.add_argument("--gga-interval", type=float, help="seconds between GGA messages")
     parser.add_argument(
         "--position-timeout",
         type=float,
-        default=15.0,
-        help="seconds to wait for MAVLink latitude/longitude before prompting (default: 15)",
+        help="seconds to wait for MAVLink latitude/longitude before prompting",
     )
-    parser.add_argument(
-        "--source-system",
-        type=int,
-        default=255,
-        help="MAVLink source system id (default: 255)",
-    )
-    parser.add_argument(
-        "--source-component",
-        type=int,
-        default=190,
-        help="MAVLink source component id (default: 190)",
-    )
+    parser.add_argument("--source-system", type=int, help="MAVLink source system id")
+    parser.add_argument("--source-component", type=int, help="MAVLink source component id")
     parser.add_argument(
         "--mavlink-version",
         type=int,
         choices=(1, 2),
-        default=2,
-        help="MAVLink wire version for outgoing frames (default: 2)",
+        help="MAVLink wire version for outgoing frames",
     )
     return parser.parse_args()
-
 
 def main():
     args = parse_args()
     try:
         config = load_config(args.config)
-    except ValueError as error:
-        print(f"Error: {error}", file=sys.stderr)
-        return 1
+        ntrip_config = ntrip_config_section(config)
+        output_config = config_section(config, "output")
+        mavlink_config = config_section(config, "mavlink")
 
-    caster = args.caster or config_text(config, "caster") or prompt("Caster hostname or IP")
-    try:
+        caster = args.caster or config_text(ntrip_config, "caster") or prompt("Caster hostname or IP")
         caster_port = (
             args.caster_port
             if args.caster_port is not None
-            else config_int(config, "caster_port", 2101)
+            else config_int(ntrip_config, "caster_port", DEFAULT_NTRIP_PORT)
+        )
+        mountpoint = args.mountpoint or config_text(ntrip_config, "mountpoint") or prompt("Mountpoint")
+        username = args.username or config_text(ntrip_config, "username") or prompt("Username")
+        password = (
+            args.password
+            if args.password is not None
+            else config_text(ntrip_config, "password", strip=False)
+        )
+
+        output_type = (
+            args.output_type or config_text(output_config, "type") or DEFAULT_OUTPUT_TYPE
+        ).lower()
+        if output_type not in ("serial", "ethernet"):
+            raise ValueError("output.type must be 'serial' or 'ethernet'")
+
+        serial_port = args.serial_port or config_text(output_config, "serial_port")
+        baud = None
+        ethernet_ip = None
+        ethernet_port = None
+        ethernet_local_ip = DEFAULT_ETHERNET_LOCAL_IP
+        ethernet_local_port = None
+
+        if output_type == "serial":
+            baud = args.baud if args.baud is not None else config_int(output_config, "baud", DEFAULT_BAUD)
+        else:
+            ethernet_ip = args.ethernet_ip or config_text(output_config, "ethernet_ip")
+            ethernet_port = (
+                args.ethernet_port
+                if args.ethernet_port is not None
+                else config_int(output_config, "ethernet_port", DEFAULT_ETHERNET_PORT)
+            )
+            ethernet_local_ip = (
+                args.ethernet_local_ip
+                or config_text(output_config, "ethernet_local_ip")
+                or DEFAULT_ETHERNET_LOCAL_IP
+            )
+            ethernet_local_port = (
+                args.ethernet_local_port
+                if args.ethernet_local_port is not None
+                else config_optional_int(output_config, "ethernet_local_port")
+            )
+
+        altitude = (
+            args.altitude
+            if args.altitude is not None
+            else config_float(mavlink_config, "altitude", DEFAULT_ALTITUDE)
+        )
+        gga_interval = (
+            args.gga_interval
+            if args.gga_interval is not None
+            else config_float(mavlink_config, "gga_interval", DEFAULT_GGA_INTERVAL)
+        )
+        position_timeout = (
+            args.position_timeout
+            if args.position_timeout is not None
+            else config_float(mavlink_config, "position_timeout", DEFAULT_POSITION_TIMEOUT)
+        )
+        source_system = (
+            args.source_system
+            if args.source_system is not None
+            else config_int(mavlink_config, "source_system", DEFAULT_SOURCE_SYSTEM)
+        )
+        source_component = (
+            args.source_component
+            if args.source_component is not None
+            else config_int(mavlink_config, "source_component", DEFAULT_SOURCE_COMPONENT)
+        )
+        mavlink_version = (
+            args.mavlink_version
+            if args.mavlink_version is not None
+            else config_int(mavlink_config, "version", DEFAULT_MAVLINK_VERSION)
+        )
+        latitude = (
+            args.latitude
+            if args.latitude is not None
+            else config_optional_float(mavlink_config, "latitude")
+        )
+        longitude = (
+            args.longitude
+            if args.longitude is not None
+            else config_optional_float(mavlink_config, "longitude")
         )
     except ValueError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
-    mountpoint = args.mountpoint or config_text(config, "mountpoint") or prompt("Mountpoint")
-    username = args.username or config_text(config, "username") or prompt("Username")
-    password = args.password if args.password is not None else config_text(config, "password", strip=False)
+
     if password is None:
         password = getpass.getpass("Password: ")
-    serial_port = args.serial_port or choose_serial_port()
+    if output_type == "serial" and serial_port is None:
+        serial_port = choose_serial_port()
 
     try:
-        if not 0 < caster_port <= 65535:
-            raise ValueError("caster port must be between 1 and 65535")
-        if args.gga_interval <= 0:
+        validate_udp_port("caster port", caster_port)
+        if gga_interval <= 0:
             raise ValueError("GGA interval must be greater than zero")
-        if args.position_timeout <= 0:
+        if position_timeout <= 0:
             raise ValueError("position timeout must be greater than zero")
-        if not 0 <= args.source_system <= 255:
+        if not 0 <= source_system <= 255:
             raise ValueError("source system id must be between 0 and 255")
-        if not 0 <= args.source_component <= 255:
+        if not 0 <= source_component <= 255:
             raise ValueError("source component id must be between 0 and 255")
+        if mavlink_version not in (1, 2):
+            raise ValueError("MAVLink version must be 1 or 2")
 
-        latitude = args.latitude
-        longitude = args.longitude
+        if output_type == "serial":
+            if baud <= 0:
+                raise ValueError("serial baud rate must be greater than zero")
+        else:
+            if not ethernet_ip:
+                raise ValueError("output.ethernet_ip is required when output.type is ethernet")
+            validate_udp_port("ethernet port", ethernet_port)
+            if ethernet_local_port is not None:
+                validate_udp_port("ethernet local port", ethernet_local_port)
+
         mavlink_sequence = 0
-
-        with serial.Serial(serial_port, baudrate=args.baud, timeout=1) as serial_connection:
+        with open_mavlink_endpoint(
+            output_type,
+            serial_port,
+            baud,
+            ethernet_ip,
+            ethernet_port,
+            ethernet_local_ip,
+            ethernet_local_port,
+        ) as mavlink_connection:
             if latitude is None or longitude is None:
                 try:
                     mav_latitude, mav_longitude, mavlink_sequence = read_mavlink_position(
-                        serial_connection,
-                        args.position_timeout,
-                        args.source_system,
-                        args.source_component,
+                        mavlink_connection,
+                        position_timeout,
+                        source_system,
+                        source_component,
                     )
                     if latitude is None:
                         latitude = mav_latitude
@@ -596,15 +886,15 @@ def main():
                 mountpoint,
                 username,
                 password,
-                serial_connection,
-                serial_port,
+                mavlink_connection,
+                mavlink_connection.description,
                 latitude,
                 longitude,
-                args.altitude,
-                args.gga_interval,
-                args.source_system,
-                args.source_component,
-                args.mavlink_version,
+                altitude,
+                gga_interval,
+                source_system,
+                source_component,
+                mavlink_version,
                 mavlink_sequence,
             )
     except KeyboardInterrupt:
@@ -613,7 +903,6 @@ def main():
         print(f"Error: {error}", file=sys.stderr)
         return 1
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
