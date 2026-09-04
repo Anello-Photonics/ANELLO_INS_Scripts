@@ -1,0 +1,9 @@
+{
+  "ntrip": {
+    "caster": "13.56.117.10",
+    "caster_port": 2101,
+    "mountpoint": "AUTO_WGS84",
+    "username": "kevin",
+    "password": "anello2024"
+  }
+}
