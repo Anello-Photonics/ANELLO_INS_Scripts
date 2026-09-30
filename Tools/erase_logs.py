@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 
+"""Erase INS logs using MAVLink; download and run this file on its own.
+
+Install dependencies: python -m pip install pymavlink pyserial
+Run with the default UDP connection: python erase_logs.py
+For connection options: python erase_logs.py --help
+"""
+
+import argparse
+import math
+import sys
 import time
 
-from Final_Configs import MavlinkSerialPort
 
-
-def erase_logs(mav_serialport, timeout=8.0):
+def erase_logs(mav, timeout=8.0):
     """
     QGC-style erase: send MAVLink LOG_ERASE (id 121), then optionally verify by requesting the log list.
     """
-    mav = mav_serialport.mav
-
     # Target sys/comp are learned from heartbeat by mavutil
     target_system = getattr(mav, "target_system", 1)
     target_component = getattr(mav, "target_component", 1)
@@ -63,16 +69,52 @@ def erase_logs(mav_serialport, timeout=8.0):
     return False
 
 
-if __name__ == "__main__":
-    mav_serialport = MavlinkSerialPort(
-        "udp:0.0.0.0:14550",
-        57600,
-        devnum=10,
-    )
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--connection", "--port", default="udp:0.0.0.0:14550",
+        help="MAVLink connection, e.g. udp:0.0.0.0:14550 or COM3 (default: %(default)s)")
+    parser.add_argument("--baud", "--baudrate", type=int, default=57600,
+                        help="serial baud rate (default: %(default)s)")
+    parser.add_argument("--heartbeat-timeout", type=float, default=10.0,
+                        help="seconds to wait for the INS (default: %(default)s)")
+    parser.add_argument("--timeout", type=float, default=8.0,
+                        help="erase verification timeout in seconds (default: %(default)s)")
+    args = parser.parse_args(argv)
+    if args.baud <= 0 or any(not math.isfinite(t) or t <= 0
+                            for t in (args.heartbeat_timeout, args.timeout)):
+        parser.error("baud rate and timeouts must be positive; timeouts must be finite")
 
-    time.sleep(0.5)
-
+    # Import after parsing so --help works even before dependencies are installed.
     try:
-        erase_logs(mav_serialport)
+        from pymavlink import mavutil
+    except ImportError as error:
+        print(f"Failed to import pymavlink: {error}", file=sys.stderr)
+        print("Install dependencies: python -m pip install pymavlink pyserial", file=sys.stderr)
+        return 1
+
+    mav = None
+    try:
+        print(f"Connecting to {args.connection}...")
+        mav = mavutil.mavlink_connection(args.connection, autoreconnect=True, baud=args.baud)
+        mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GENERIC,
+                               mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+        if mav.wait_heartbeat(timeout=args.heartbeat_timeout) is None:
+            print("[!] No heartbeat received; no erase command sent. "
+                  "Check the INS connection and UDP port.", file=sys.stderr)
+            return 1
+        time.sleep(0.5)
+        return 0 if erase_logs(mav, timeout=args.timeout) else 1
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        return 130
+    except (OSError, ValueError) as error:
+        print(f"[!] {error}", file=sys.stderr)
+        return 1
     finally:
-        mav_serialport.close()
+        if mav is not None:
+            mav.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

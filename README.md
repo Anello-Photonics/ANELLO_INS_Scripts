@@ -32,3 +32,22 @@ A collection of Python utilities for ANELLO INS devices. Each script below notes
 
 ## Tools/PCANBasic.py and Tools/PCANBasic.dll
 Support modules for CAN communication used by `comm_checks.py`; they are not intended to be executed directly.
+
+## Tools/erase_logs.py
+
+Standalone utility to erase onboard INS logs using MAVLink LOG_ERASE, then request
+the log list to verify the result. Download just `Tools/erase_logs.py` from GitHub
+(use **Download raw file**) into your Downloads folder; no other repository files
+or `Final_Configs.py` are required.
+
+From PowerShell in that folder:
+
+```powershell
+python -m pip install pymavlink pyserial
+python .\erase_logs.py
+```
+
+The default connection is `udp:0.0.0.0:14550`. Override it with
+`--connection udp:0.0.0.0:16550`, or use `--connection COM3 --baud 57600` for serial.
+Run `python .\erase_logs.py --help` for all options. Exit code 0 means the INS
+reported zero logs; code 1 means connection failure or erase could not be verified.
