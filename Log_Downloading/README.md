@@ -47,3 +47,12 @@ Offline regression checks (from the repository root):
 python -m unittest discover -s Log_Downloading -p "test_mavlink_ulog_streaming.py" -v
 ```
 
+
+After the dedicated streaming heartbeat arrives, the script closes its setup
+connection (normally PC UDP port 14550). AMarinerControl can then use that port
+while logging continues on 14560. The script does not reopen 14550 for cleanup:
+it sends the stop command through the streaming link itself. Since stopping that
+instance also removes the reply path, remote shutdown may remain unconfirmed;
+the next run checks for and restarts any remaining instance. Setup failures use
+the original control link for cleanup before closing it. Direct streaming with
+`--no-auto-setup` keeps its selected port open until logging exits.

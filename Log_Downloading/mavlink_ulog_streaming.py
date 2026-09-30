@@ -161,16 +161,34 @@ def streaming_connection(args):
             raise RuntimeError('{}\nStart command output:\n{}'.format(exc, response.strip())) from exc
         shell.release()
         wait_for_vehicle(stream, args.connect_timeout, vehicle.get_srcSystem())
+        control.close()
+        control = None
+        shell = None
+        print('Released setup connection {}; available for AMarinerControl.'.format(args.port))
         print('Streaming connection ready on {}:{}'.format(args.local_ip, args.stream_port))
         yield stream
     finally:
+        cleanup_over_stream = shell is None and start_attempted and stream is not None
+        if cleanup_over_stream:
+            # Never rebind the setup port: AMarinerControl may now own it.
+            shell = MavlinkShell(stream, args.connect_timeout)
         if shell is not None:
             try:
                 if start_attempted:
                     command = 'mavlink stop -u {}'.format(args.stream_port)
                     print('\nINS: ' + command)
-                    shell.run(command)
-                    wait_for_udp_instance(shell, args.stream_port, False, args.connect_timeout)
+                    if cleanup_over_stream:
+                        # This command removes its own transport. A missing reply
+                        # is expected, but cannot prove the remote stop succeeded.
+                        try:
+                            shell.run(command, timeout=min(2.0, args.connect_timeout))
+                        except RuntimeError:
+                            print('Stop requested over the streaming link; remote shutdown '
+                                  'could not be confirmed. The next run will restart this instance.')
+                    else:
+                        # Setup failures still have the bootstrap link available.
+                        shell.run(command)
+                        wait_for_udp_instance(shell, args.stream_port, False, args.connect_timeout)
             except Exception as exc:
                 print('Cleanup warning: {}. Run "mavlink stop -u {}" in the INS console.'.format(
                     exc, args.stream_port), file=sys.stderr)
