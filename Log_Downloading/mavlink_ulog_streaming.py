@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Stream ULog data over MAVLink. For UDP, PORT is the existing control link;
---local-ip supplies the PC address for automatic dedicated-link setup.
-Use --no-auto-setup for a manually configured streaming link.
+Stream ULog data over MAVLink on PORT without configuring the INS by default.
+Use --auto-setup with an existing UDP control link and --local-ip to create
+a dedicated streaming connection before logging.
 
 @author: Beat Kueng (beat-kueng@gmx.net)
 """
@@ -128,8 +128,18 @@ def streaming_connection(args):
     start_attempted = False
     try:
         control = mavutil.mavlink_connection(args.port, autoreconnect=True, baud=args.baudrate)
+        if args.port.startswith('udpout:'):
+            # PX4 can retain the first UDP peer's source port for the lifetime
+            # of the instance. Reuse our port instead of an OS-assigned one.
+            try:
+                control.port.bind(('0.0.0.0', args.udp_local_port))
+            except OSError as exc:
+                raise RuntimeError('Cannot bind local UDP port {}. Close another logger '
+                                   'using it, or choose --udp-local-port. {}'.format(
+                                       args.udp_local_port, exc)) from exc
+            print('Using fixed local UDP port {} for {}'.format(args.udp_local_port, args.port))
         vehicle = wait_for_vehicle(control, args.connect_timeout)
-        if args.no_auto_setup or udp_listener_port(args.port) is None:
+        if not args.auto_setup:
             yield control
             return
 
@@ -411,7 +421,7 @@ class MavlinkLogStreaming():
 
 
 
-def main():
+def parse_args(argv=None):
     parser = ArgumentParser(description=__doc__)
     parser.add_argument('port', metavar='PORT', nargs='?', default = None,
             help='Mavlink port name: serial: DEVICE[,BAUD], udp: IP:PORT, tcp: tcp:IP:PORT. Eg: \
@@ -420,8 +430,15 @@ def main():
                       help="Mavlink port baud rate (default=115200)", default=115200)
     parser.add_argument("--output", "-o", dest="output", default = '.',
                       help="output file or directory (default=CWD)")
-    parser.add_argument('--no-auto-setup', action='store_true',
-                        help='Stream directly on PORT without creating an INS UDP instance')
+    setup = parser.add_mutually_exclusive_group()
+    setup.add_argument('--auto-setup', action='store_true',
+                       help='Configure a dedicated INS UDP stream using PORT as the control link (opt-in)')
+    setup.add_argument('--no-auto-setup', dest='auto_setup', action='store_false',
+                       help='Stream directly on PORT without configuring the INS (default)')
+    parser.set_defaults(auto_setup=False)
+    parser.add_argument('--udp-local-port', type=int, default=14560,
+                        help='Fixed PC source port for udpout connections (default: 14560); '
+                             'keep the same value between runs')
     parser.add_argument('--local-ip', help='PC IPv4 address; required for automatic UDP setup')
     parser.add_argument('--stream-port', type=int, default=14560,
                         help='Dedicated UDP port on INS and PC (default: 14560)')
@@ -429,12 +446,16 @@ def main():
                         help='Dedicated MAVLink maximum rate in B/s (default: 200000)')
     parser.add_argument('--connect-timeout', type=float, default=10,
                         help='Heartbeat and shell timeout in seconds (default: 10)')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not 1 <= args.stream_port <= 65535 or args.stream_rate <= 0 or not 0 < args.connect_timeout < float('inf'):
         parser.error('stream-port must be 1..65535; stream-rate and connect-timeout must be positive')
-    if args.port and udp_listener_port(args.port) is not None and not args.no_auto_setup:
+    if not 1 <= args.udp_local_port <= 65535:
+        parser.error('--udp-local-port must be 1..65535')
+    if args.auto_setup:
+        if not args.port or udp_listener_port(args.port) is None:
+            parser.error('--auto-setup requires a UDP listener PORT, e.g. 0.0.0.0:14550')
         if not args.local_ip:
-            parser.error('--local-ip PC_IPV4 is required for automatic UDP setup; use --no-auto-setup for an existing link')
+            parser.error('--local-ip PC_IPV4 is required for automatic UDP setup; omit --auto-setup for an existing link')
         try:
             address = ipaddress.IPv4Address(args.local_ip)
             if address.is_unspecified or address.is_multicast or str(address) == '255.255.255.255':
@@ -443,6 +464,12 @@ def main():
             parser.error('--local-ip must be a unicast PC IPv4 address')
         if udp_listener_port(args.port) == args.stream_port:
             parser.error('PORT is the existing control link; --stream-port must be different')
+
+    return args
+
+
+def main():
+    args = parse_args()
 
     if os.path.isdir(args.output):
         filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S.ulg")
