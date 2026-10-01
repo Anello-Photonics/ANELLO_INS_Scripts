@@ -2,8 +2,9 @@
 
 Install the dependency with `python -m pip install pymavlink`.
 
-By default, the script streams directly on the supplied port without configuring
-any MAVLink instances. For an already configured streaming link on port 14560:
+By default, the script streams directly without configuring any MAVLink instances.
+If PORT is omitted, it connects to `udpout:192.168.0.3:16550`.
+For example: `python .\mavlink_ulog_streaming.py --output "C:\Users\kryan\Downloads"`. For an already configured streaming link on port 14560:
 
 ```powershell
 python .\mavlink_ulog_streaming.py 0.0.0.0:14560 --output "C:\Users\kryan\Downloads"
@@ -77,3 +78,31 @@ can leave replies going to the old socket. If the INS already learned an old
 port, restart its MAVLink instance or reboot once before the first fixed-port
 run. Changing the PC IP or source port later may require resetting that instance
 again. This does not enable automatic setup or bind PC port 14550.
+
+## Configure the persistent streaming link
+
+Download or run the standalone `configure_log_stream_link.py`:
+
+```powershell
+python -m pip install pymavlink
+python .\configure_log_stream_link.py
+```
+
+It uses the same `MavlinkSerialPort` connection, shell wake-up delays, and timed
+response-reading loop as `Maritime_INS_CFG.py`, with its helper code included
+so this file runs independently. It connects to `udp:0.0.0.0:14550` and sends:
+
+```text
+param set MAV_1_CONFIG 1000
+param set MAV_1_RATE 200000
+param set MAV_1_REMOTE_PRT 16550
+param set MAV_1_UDP_PRT 16550
+param save
+reboot
+```
+
+Like `Maritime_INS_CFG.py`, it prints responses and continues if no response
+arrives; it does not require an echo marker or verify parameter readback.
+`--timeout` controls response collection per command (default: 1 second).
+It releases the shell and closes the UDP connection on exit. Allow the INS to
+restart before connecting.

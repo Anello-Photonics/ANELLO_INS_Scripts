@@ -423,9 +423,9 @@ class MavlinkLogStreaming():
 
 def parse_args(argv=None):
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument('port', metavar='PORT', nargs='?', default = None,
+    parser.add_argument('port', metavar='PORT', nargs='?', default='udpout:192.168.0.3:16550',
             help='Mavlink port name: serial: DEVICE[,BAUD], udp: IP:PORT, tcp: tcp:IP:PORT. Eg: \
-/dev/ttyUSB0 or 0.0.0.0:14550. Auto-detect serial if not given.')
+/dev/ttyUSB0 or 0.0.0.0:14550. Default: %(default)s.')
     parser.add_argument("--baudrate", "-b", dest="baudrate", type=int,
                       help="Mavlink port baud rate (default=115200)", default=115200)
     parser.add_argument("--output", "-o", dest="output", default = '.',
@@ -477,22 +477,6 @@ def main():
     else:
         filename = args.output
     print('Output file name: {:}'.format(filename))
-
-    if args.port == None:
-        serial_list = mavutil.auto_detect_serial(preferred_list=['*FTDI*',
-            "*Arduino_Mega_2560*", "*3D_Robotics*", "*USB_to_UART*", '*PX4*', '*FMU*'])
-
-        if len(serial_list) == 0:
-            print("Error: no serial connection found")
-            return
-
-        if len(serial_list) > 1:
-            print('Auto-detected serial ports are:')
-            for port in serial_list:
-                print(" {:}".format(port))
-        print('Using port {:}'.format(serial_list[0]))
-        args.port = serial_list[0].device
-
 
     print("Connecting to MAVLINK...")
     try:
