@@ -16,13 +16,6 @@ A collection of Python utilities for ANELLO INS devices. Each script below notes
   2. Ensure MAVLink access to the INS (default `udp:0.0.0.0:14550`).
   3. Run `python Tools/Maritime_INS_CFG.py` to push the configured parameters, then allow the unit to reboot if prompted.
 
-## Tools/Listener_Topics.py
-* **Purpose:** Desktop UI for discovering PX4 listener topics and viewing live topic data streamed from the INS.
-* **Usage:**
-  1. Install GUI and MAVLink dependencies: `pip install pymavlink pyserial tk` (Tkinter is bundled with many Python installations).
-  2. Connect to the INS over MAVLink (default `udp:0.0.0.0:14550`).
-  3. Run `python Tools/Listener_Topics.py` and use the UI to select topics and start/stop streaming.
-
 ## Tools/comm_checks.py
 * **Purpose:** Runs quick communication checks (Ethernet ping, RS232 MAVLink startup, and CAN PGN verification) against an INS.
 * **Usage:**
