@@ -1,4 +1,54 @@
-# MAVLink ULog streaming
+# Log downloading
+
+## Download stored Maritime INS logs
+
+`download_maritime_ins_logs.py` lists and downloads logs stored on a Maritime INS
+using the same MAVLink log protocol as AMarinerControl
+(`LOG_REQUEST_LIST` / `LOG_ENTRY` / `LOG_REQUEST_DATA` / `LOG_DATA`).
+It retrieves existing log files rather than streaming live ULog data, and does
+not use MAVLink FTP.
+
+Install the dependency and run these examples from `Log_Downloading`:
+
+```powershell
+python -m pip install pymavlink
+
+# List available logs without downloading
+python .\download_maritime_ins_logs.py --connect udpin:0.0.0.0:14550 --list
+
+# Download the newest log from a specific INS to a local folder
+python .\download_maritime_ins_logs.py --connect udpout:192.168.0.3:14550 --latest 1 --output "C:\Users\kryan\Downloads"
+
+# Download selected log IDs, including a range
+python .\download_maritime_ins_logs.py --connect udpin:0.0.0.0:14550 --id 3,4,7-9
+
+# Download every listed log
+python .\download_maritime_ins_logs.py --connect udpin:0.0.0.0:14550 --all
+```
+
+`--connect` is required: use `udpin:` to listen for the INS or `udpout:` to
+contact its IP address, adjusting the address and port for your configuration.
+Serial and TCP pymavlink connection strings are also supported. `--latest N`
+selects the N highest log IDs. Without `--latest`, `--id`, or `--all`, the script
+only displays the log list.
+
+Downloads default to the current working directory; `--output` selects a folder.
+Files include the log ID and UTC timestamp (or `UnknownDate`) in their names.
+Maritime INS/PX4 logs default to `.ulg`; use `--extension` to override this.
+Existing files are preserved by adding a numeric suffix unless `--overwrite`
+is supplied.
+
+Transfers show progress and retry missing data. The default request window is
+56 packets; `--fast` uses AMarinerControl-style 512-packet windows for higher
+throughput. If downloads stall, try `--request-packets 32`, which overrides
+`--fast`. Use `--help` for timeout, retry, and other connection options.
+
+The script also supports permanent deletion of all logs on the INS with
+`--erase-all --confirm-erase-all`. This cannot be combined with listing or
+download selection options; it sends the erase request without verifying that
+deletion has completed.
+
+## MAVLink ULog streaming
 
 Install the dependency with `python -m pip install pymavlink`.
 
